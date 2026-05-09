@@ -1,0 +1,32 @@
+# Compiled binaries
+pgcdc
+pgproxy
+*.exe
+
+# DLQ files from testing
+*.dlq
+*.jsonl
+
+# Environment files
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+
+# Claude Code
+.claude/
+
+# Test/log artifacts
+*.log
+/tmp/

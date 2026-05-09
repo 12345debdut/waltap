@@ -1,0 +1,82 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pgwal-lab
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: lab
+      POSTGRES_PASSWORD: lab
+      POSTGRES_DB: wallab
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=5
+      - -c
+      - max_wal_senders=5
+      - -c
+      - track_commit_timestamp=on
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # Streaming replica — receives WAL from the primary.
+  # Uses pg_basebackup on startup to clone the primary's data,
+  # then stays in sync via streaming replication.
+  postgres-replica:
+    image: postgres:16-alpine
+    container_name: pgwal-replica
+    ports:
+      - "5435:5432"
+    environment:
+      PGUSER: lab
+      PGPASSWORD: lab
+    entrypoint:
+      - bash
+      - -c
+      - |
+        # Wait for primary to be ready
+        until pg_isready -h postgres -p 5432 -U lab; do
+          echo "waiting for primary..."
+          sleep 1
+        done
+
+        # If data directory is empty, clone from primary
+        if [ ! -f /var/lib/postgresql/data/PG_VERSION ]; then
+          echo "cloning primary with pg_basebackup..."
+          pg_basebackup -h postgres -p 5432 -U lab -D /var/lib/postgresql/data -Fp -Xs -P -R
+          chown -R postgres:postgres /var/lib/postgresql/data
+          chmod 700 /var/lib/postgresql/data
+        fi
+
+        # Start postgres as the postgres user in replica mode
+        exec su-exec postgres postgres \
+          -D /var/lib/postgresql/data \
+          -c hot_standby=on \
+          -c primary_conninfo='host=postgres port=5432 user=lab password=lab'
+    depends_on:
+      - postgres
+    volumes:
+      - pgreplica:/var/lib/postgresql/data
+
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: pgwal-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft mode — no Zookeeper. Kafka 3.3+ supports this natively.
+      # The controller and broker run in the same process for dev simplicity.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+volumes:
+  pgdata:
+  pgreplica:
