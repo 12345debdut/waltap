@@ -1,19 +1,17 @@
-# pgcdc
+# waltap
 
-A Change Data Capture pipeline and read/write split proxy for PostgreSQL, built in Go.
+A Change Data Capture pipeline for PostgreSQL that taps into the Write-Ahead Log via logical replication and delivers row-level changes to pluggable sinks (stdout, webhook, Kafka). Includes a read/write split TCP proxy.
 
-`pgcdc` connects to PostgreSQL's logical replication stream, captures row-level changes (INSERT, UPDATE, DELETE) in real time, and delivers them to pluggable sinks. It also includes `pgproxy`, a TCP proxy that routes reads to replicas and writes to the primary.
+## How It Works
 
-## How it works
-
-PostgreSQL's Write-Ahead Log (WAL) records every change before it hits disk. Logical decoding (via the `pgoutput` plugin) translates those raw WAL records into structured row-level events. `pgcdc` subscribes to this stream using the streaming replication protocol and delivers each event to a configurable sink.
+PostgreSQL's Write-Ahead Log (WAL) records every change before it hits disk. Logical decoding (via the `pgoutput` plugin) translates those raw WAL records into structured row-level events. waltap subscribes to this stream using the streaming replication protocol and delivers each event to a configurable sink.
 
 ```
 PostgreSQL WAL
      |
      | logical replication (pgoutput)
      v
-  pgcdc
+  waltap
      |
      +---> stdout (NDJSON)
      +---> webhook (HTTP POST per event)
@@ -32,18 +30,18 @@ App --> pgproxy(:5434) --> Primary(:5433)   writes, transactions
 ## Features
 
 - **Real-time CDC** via PostgreSQL logical replication
-- **5 sink types**: stdout, webhook, kafka, stdout-batch, webhook-batch
-- **Filtering**: by table name, by action (INSERT/UPDATE/DELETE), or both
-- **Snapshotting**: load existing rows before streaming changes
-- **Batching**: configurable batch size and flush interval
-- **Retry with exponential backoff**: configurable attempts, delays, and max delay cap
-- **Dead-letter queue**: failed events written to a JSONL file, stream continues
-- **Prometheus metrics**: event counts, delivery latency, replication lag, retry stats
-- **Read/write split proxy**: routes SELECTs to replica, writes to primary, transaction-aware
+- **5 sink types** — stdout, webhook, kafka, stdout-batch, webhook-batch
+- **Filtering** — by table name, by action (INSERT/UPDATE/DELETE), or both
+- **Snapshotting** — load existing rows before streaming changes
+- **Batching** — configurable batch size and flush interval
+- **Retry with exponential backoff** — configurable attempts, delays, and max delay cap
+- **Dead-letter queue** — failed events written to a JSONL file, stream continues
+- **Prometheus metrics** — event counts, delivery latency, replication lag, retry stats
+- **Read/write split proxy** — routes SELECTs to replica, writes to primary, transaction-aware
 
 ## Prerequisites
 
-- Go 1.22+
+- Go 1.25+
 - Docker and Docker Compose
 - PostgreSQL 14+ with `wal_level=logical` (provided via docker-compose)
 
@@ -88,7 +86,7 @@ docker exec pgwal-lab psql -U lab -d wallab -c "
 "
 ```
 
-You'll see the event in the pgcdc output:
+You'll see the event appear in the pgcdc terminal:
 
 ```json
 {"action":"INSERT","schema":"public","table":"users","new":{"email":"alice@example.com","id":1,"name":"alice"},"timestamp":"...","lsn":"0/...","xid":123}
@@ -143,11 +141,11 @@ You'll see the event in the pgcdc output:
   --replica "postgres://lab:lab@localhost:5435/wallab"
 ```
 
-Then connect your application to `localhost:5434`. SELECTs go to the replica, writes go to the primary. Transactions are pinned to the primary.
+Connect your application to `localhost:5434`. SELECTs go to the replica, writes go to the primary. Transactions are pinned to the primary.
 
 ### Prometheus Metrics
 
-Metrics are exposed at `http://localhost:2112/metrics` by default. Key metrics:
+Metrics are exposed at `http://localhost:2112/metrics` by default.
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -159,6 +157,32 @@ Metrics are exposed at `http://localhost:2112/metrics` by default. Key metrics:
 | `pgcdc_batch_flush_total` | counter | Batch flushes (labels: trigger) |
 | `pgcdc_batch_size` | histogram | Events per batch flush |
 | `pgcdc_snapshot_rows_total` | counter | Rows emitted during snapshot |
+
+## Architecture
+
+The sink system uses the decorator pattern. Sinks compose inside-out:
+
+```
+MetricsSink -> RetrySink (onFailure: -> DLQ) -> WebhookSink
+```
+
+- **MetricsSink** (outermost) — records delivery latency including retries
+- **RetrySink** — exponential backoff, configurable failure callback
+- **DLQSink** — writes failed events to file, returns nil so the stream continues
+- **Inner sink** — the actual destination (stdout, webhook, kafka)
+
+The proxy uses pgx connection pools for backends and handles the PostgreSQL wire protocol directly for client connections. It classifies queries by inspecting the first SQL keyword and routes accordingly.
+
+## Documentation
+
+Detailed documentation lives in the [`docs/`](docs/) directory:
+
+| Document | Description |
+|----------|-------------|
+| [Architecture](docs/architecture.md) | System overview, data flow, sink interface, decorator pattern, proxy internals |
+| [WAL and Logical Replication](docs/wal-and-logical-replication.md) | PostgreSQL WAL structure, logical decoding, replication protocol, pgoutput messages |
+| [Sink Reference](docs/sinks.md) | All sink types, decorators (retry, batch, metrics, DLQ), configuration, chain construction |
+| [Operations Guide](docs/operations.md) | Running, monitoring (Prometheus/Grafana), troubleshooting, operational procedures |
 
 ## CLI Reference
 
@@ -195,17 +219,27 @@ Metrics are exposed at `http://localhost:2112/metrics` by default. Key metrics:
 ## Project Structure
 
 ```
+.github/
+  workflows/
+    ci.yml               GitHub Actions CI (vet, build, test)
 cmd/
   pgcdc/                 CDC pipeline CLI
   pgproxy/               Read/write split proxy CLI
   webhook-test-server/   Test HTTP server for webhook sink
   flaky-server/          Intentionally-failing server for retry testing
+docs/
+  architecture.md        System overview, data flow, internals
+  wal-and-logical-replication.md  PostgreSQL WAL and replication protocol
+  sinks.md               Sink types and decorator reference
+  operations.md          Running, monitoring, troubleshooting
 internal/
   cdc/
-    stream.go            WAL streaming engine (replication protocol, pgoutput decoding)
-    filter.go            Table and action filtering
-    snapshot.go           Initial data load via REPEATABLE READ
     event.go             ChangeEvent data model
+    event_test.go        ChangeEvent serialization tests
+    filter.go            Table and action filtering
+    filter_test.go       Filter matching tests
+    snapshot.go          Initial data load via REPEATABLE READ
+    stream.go            WAL streaming engine (replication protocol, pgoutput decoding)
   sink/
     sink.go              Sink interface
     stdout.go            NDJSON to stdout
@@ -214,43 +248,22 @@ internal/
     kafka.go             Kafka producer (franz-go, per-table topics)
     stdout_batch.go      Batched JSON to stdout
     batch.go             Batching decorator (size + time triggers)
+    batch_test.go        Batch flush and close tests
     retry.go             Retry decorator (exponential backoff)
+    retry_test.go        Retry and backoff tests
     dlq.go               Dead-letter queue (JSONL file)
+    dlq_test.go          DLQ write and integration tests
     metrics.go           Prometheus metrics decorator
   proxy/
     proxy.go             TCP proxy with query routing
+    proxy_test.go        Proxy integration tests (raw wire protocol)
     classifier.go        SQL classification (read vs write vs transaction)
+    classifier_test.go   30 classification test cases
   metrics/
     metrics.go           Prometheus metric definitions
 docker-compose.yml       Postgres primary + replica + Kafka
 Makefile                 Build, test, run targets
 ```
-
-## Architecture
-
-The sink system uses the decorator pattern. Sinks compose inside-out:
-
-```
-MetricsSink -> RetrySink (onFailure: -> DLQ) -> WebhookSink
-```
-
-- **MetricsSink** (outermost): records delivery latency including retries
-- **RetrySink**: exponential backoff, configurable failure callback
-- **DLQSink**: writes failed events to file, returns nil so the stream continues
-- **Inner sink**: the actual destination (stdout, webhook, kafka)
-
-The proxy uses pgx connection pools for backends and handles the PostgreSQL wire protocol directly for client connections. It classifies queries by inspecting the first SQL keyword and routes accordingly.
-
-## Documentation
-
-Detailed documentation lives in the [`docs/`](docs/) directory:
-
-| Document | Description |
-|----------|-------------|
-| [Architecture](docs/architecture.md) | System overview, data flow, sink interface, decorator pattern, proxy internals |
-| [WAL and Logical Replication](docs/wal-and-logical-replication.md) | PostgreSQL WAL structure, logical decoding, replication protocol, pgoutput messages |
-| [Sink Reference](docs/sinks.md) | All sink types, decorators (retry, batch, metrics, DLQ), configuration, chain construction |
-| [Operations Guide](docs/operations.md) | Running, monitoring (Prometheus/Grafana), troubleshooting, operational procedures |
 
 ## Development
 
