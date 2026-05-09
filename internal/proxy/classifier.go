@@ -1,3 +1,18 @@
+// Package proxy implements a PostgreSQL read/write split TCP proxy.
+//
+// The proxy sits between client applications and PostgreSQL, parsing the
+// wire protocol to route queries: reads go to a replica for load distribution,
+// writes go to the primary for consistency. Transactions are pinned to the
+// primary to preserve isolation guarantees.
+//
+// The proxy handles the client-facing Postgres wire protocol directly
+// (SSLRequest, startup, authentication) and uses pgx connection pools
+// for backend communication, which handles SCRAM-SHA-256 authentication
+// automatically.
+//
+// Only the simple query protocol ('Q' messages) is supported. The extended
+// query protocol ('P'/'B'/'D'/'E') used by pgx and JDBC by default is not
+// handled — clients must be configured to use simple queries.
 package proxy
 
 import "strings"

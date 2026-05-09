@@ -73,6 +73,8 @@ func NewKafkaSink(brokers string, topicPrefix string) (*KafkaSink, error) {
 	}, nil
 }
 
+// Deliver publishes a single event to the appropriate Kafka topic.
+// The topic is derived from the event's schema and table name.
 func (s *KafkaSink) Deliver(ctx context.Context, event cdc.ChangeEvent) error {
 	// Build the topic name: prefix.schema.table
 	topic := fmt.Sprintf("%s.%s.%s", s.topicPrefix, event.Schema, event.Table)
@@ -102,6 +104,7 @@ func (s *KafkaSink) Deliver(ctx context.Context, event cdc.ChangeEvent) error {
 	return nil
 }
 
+// Close flushes pending messages and closes the Kafka producer.
 func (s *KafkaSink) Close() error {
 	s.client.Close()
 	return nil

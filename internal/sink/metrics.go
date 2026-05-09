@@ -20,10 +20,14 @@ type MetricsSink struct {
 	sinkName string
 }
 
+// NewMetricsSink wraps a Sink with Prometheus instrumentation.
+// sinkName is used as a label value to distinguish metrics from different sink types.
 func NewMetricsSink(inner Sink, sinkName string) *MetricsSink {
 	return &MetricsSink{inner: inner, sinkName: sinkName}
 }
 
+// Deliver records replication lag, delivery duration, and event counts,
+// then delegates to the inner sink.
 func (m *MetricsSink) Deliver(ctx context.Context, event cdc.ChangeEvent) error {
 	start := time.Now()
 
@@ -49,6 +53,7 @@ func (m *MetricsSink) Deliver(ctx context.Context, event cdc.ChangeEvent) error 
 	return err
 }
 
+// Close closes the inner sink.
 func (m *MetricsSink) Close() error {
 	return m.inner.Close()
 }

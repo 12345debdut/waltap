@@ -315,6 +315,7 @@ func (s *Stream) decodeTuple(tuple *pglogrepl.TupleData, rel *pglogrepl.Relation
 	return values
 }
 
+// decodeTextColumn decodes a column value from Postgres text format using pgx's type system.
 func (s *Stream) decodeTextColumn(data []byte, oid uint32) (any, error) {
 	typ, ok := s.typeMap.TypeForOID(oid)
 	if !ok {
@@ -323,6 +324,7 @@ func (s *Stream) decodeTextColumn(data []byte, oid uint32) (any, error) {
 	return typ.Codec.DecodeValue(s.typeMap, oid, pgtype.TextFormatCode, data)
 }
 
+// decodeBinaryColumn decodes a column value from Postgres binary format using pgx's type system.
 func (s *Stream) decodeBinaryColumn(data []byte, oid uint32) (any, error) {
 	typ, ok := s.typeMap.TypeForOID(oid)
 	if !ok {
@@ -342,6 +344,7 @@ func (s *Stream) deliverIfMatch(ctx context.Context, event ChangeEvent) error {
 	return nil
 }
 
+// sendAck reports progress to Postgres so it can recycle WAL segments.
 func (s *Stream) sendAck(ctx context.Context, conn *pgconn.PgConn, lsn pglogrepl.LSN) error {
 	return pglogrepl.SendStandbyStatusUpdate(ctx, conn,
 		pglogrepl.StandbyStatusUpdate{
@@ -413,6 +416,7 @@ func (s *Stream) ensureSlot(ctx context.Context, conn *pgconn.PgConn) (pglogrepl
 	return lsn, nil
 }
 
+// getSlotLSN looks up the confirmed_flush_lsn for an existing replication slot.
 func (s *Stream) getSlotLSN(ctx context.Context) (pglogrepl.LSN, error) {
 	conn, err := pgconn.Connect(ctx, s.normalConnStr)
 	if err != nil {

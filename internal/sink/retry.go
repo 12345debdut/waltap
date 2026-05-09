@@ -120,7 +120,7 @@ func (r *RetrySink) Deliver(ctx context.Context, event cdc.ChangeEvent) error {
 	return r.onFailure(event, lastErr)
 }
 
-// Close closes the inner sink.
+// Close delegates to the inner sink's Close.
 func (r *RetrySink) Close() error {
 	return r.inner.Close()
 }

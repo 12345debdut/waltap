@@ -28,6 +28,7 @@ type WebhookSink struct {
 	client *http.Client
 }
 
+// NewWebhookSink creates a sink that POSTs each event as JSON to the given URL.
 func NewWebhookSink(url string) *WebhookSink {
 	return &WebhookSink{
 		url: url,
@@ -37,6 +38,8 @@ func NewWebhookSink(url string) *WebhookSink {
 	}
 }
 
+// Deliver sends a single event as an HTTP POST with JSON body.
+// Returns an error if the endpoint returns a non-2xx status.
 func (s *WebhookSink) Deliver(ctx context.Context, event cdc.ChangeEvent) error {
 	body, err := json.Marshal(event)
 	if err != nil {
@@ -64,6 +67,7 @@ func (s *WebhookSink) Deliver(ctx context.Context, event cdc.ChangeEvent) error 
 	return nil
 }
 
+// Close drains idle HTTP connections.
 func (s *WebhookSink) Close() error {
 	s.client.CloseIdleConnections()
 	return nil

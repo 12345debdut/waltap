@@ -27,12 +27,14 @@ type batchOutput struct {
 	Events    []cdc.ChangeEvent `json:"events"`
 }
 
+// NewStdoutBatchSink creates a batch sink that writes JSON batch objects to stdout.
 func NewStdoutBatchSink() *StdoutBatchSink {
 	return &StdoutBatchSink{
 		encoder: json.NewEncoder(os.Stdout),
 	}
 }
 
+// DeliverBatch writes a batch as a JSON object with batch_size and events fields.
 func (s *StdoutBatchSink) DeliverBatch(_ context.Context, events []cdc.ChangeEvent) error {
 	fmt.Fprintf(os.Stderr, "[batch] flushing %d events\n", len(events))
 	return s.encoder.Encode(batchOutput{
@@ -41,6 +43,7 @@ func (s *StdoutBatchSink) DeliverBatch(_ context.Context, events []cdc.ChangeEve
 	})
 }
 
+// Close is a no-op — stdout doesn't need closing.
 func (s *StdoutBatchSink) Close() error {
 	return nil
 }

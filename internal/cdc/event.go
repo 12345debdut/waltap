@@ -1,3 +1,22 @@
+// Package cdc implements the core Change Data Capture engine for PostgreSQL.
+//
+// It connects to PostgreSQL's logical replication stream via the pgoutput
+// plugin, decodes WAL (Write-Ahead Log) changes into structured [ChangeEvent]
+// values, and delivers them to a caller-supplied handler function.
+//
+// The package has three main components:
+//
+//   - [Stream] manages the replication connection, decodes pgoutput messages,
+//     and drives the event loop.
+//   - [Snapshot] loads existing rows from tables before streaming begins,
+//     ensuring the consumer sees the full dataset.
+//   - [Filter] controls which tables and actions pass through to the handler.
+//
+// Typical usage:
+//
+//	filter := cdc.NewFilter("users,orders", "INSERT,UPDATE")
+//	stream := cdc.NewStream(connStr, "pgcdc_slot", "pgcdc_pub", filter, handler)
+//	err := stream.Run(ctx)
 package cdc
 
 import "time"

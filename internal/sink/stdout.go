@@ -22,16 +22,19 @@ type StdoutSink struct {
 	encoder *json.Encoder
 }
 
+// NewStdoutSink creates a sink that writes NDJSON to stdout.
 func NewStdoutSink() *StdoutSink {
 	return &StdoutSink{
 		encoder: json.NewEncoder(os.Stdout),
 	}
 }
 
+// Deliver writes a single event as a JSON line to stdout.
 func (s *StdoutSink) Deliver(_ context.Context, event cdc.ChangeEvent) error {
 	return s.encoder.Encode(event)
 }
 
+// Close is a no-op — stdout doesn't need closing.
 func (s *StdoutSink) Close() error {
-	return nil // stdout doesn't need closing
+	return nil
 }

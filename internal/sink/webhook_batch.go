@@ -32,6 +32,7 @@ type WebhookBatchSink struct {
 	client *http.Client
 }
 
+// NewWebhookBatchSink creates a batch sink that POSTs JSON arrays to the given URL.
 func NewWebhookBatchSink(url string) *WebhookBatchSink {
 	return &WebhookBatchSink{
 		url: url,
@@ -41,6 +42,7 @@ func NewWebhookBatchSink(url string) *WebhookBatchSink {
 	}
 }
 
+// DeliverBatch sends a batch of events as a JSON array via HTTP POST.
 func (s *WebhookBatchSink) DeliverBatch(ctx context.Context, events []cdc.ChangeEvent) error {
 	body, err := json.Marshal(events)
 	if err != nil {
@@ -67,6 +69,7 @@ func (s *WebhookBatchSink) DeliverBatch(ctx context.Context, events []cdc.Change
 	return nil
 }
 
+// Close drains idle HTTP connections.
 func (s *WebhookBatchSink) Close() error {
 	s.client.CloseIdleConnections()
 	return nil

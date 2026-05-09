@@ -241,6 +241,17 @@ MetricsSink -> RetrySink (onFailure: -> DLQ) -> WebhookSink
 
 The proxy uses pgx connection pools for backends and handles the PostgreSQL wire protocol directly for client connections. It classifies queries by inspecting the first SQL keyword and routes accordingly.
 
+## Documentation
+
+Detailed documentation lives in the [`docs/`](docs/) directory:
+
+| Document | Description |
+|----------|-------------|
+| [Architecture](docs/architecture.md) | System overview, data flow, sink interface, decorator pattern, proxy internals |
+| [WAL and Logical Replication](docs/wal-and-logical-replication.md) | PostgreSQL WAL structure, logical decoding, replication protocol, pgoutput messages |
+| [Sink Reference](docs/sinks.md) | All sink types, decorators (retry, batch, metrics, DLQ), configuration, chain construction |
+| [Operations Guide](docs/operations.md) | Running, monitoring (Prometheus/Grafana), troubleshooting, operational procedures |
+
 ## Development
 
 ```bash
@@ -252,6 +263,20 @@ make docker-up    # Start Postgres + Kafka
 make docker-down  # Stop everything
 make clean        # Remove built binaries
 ```
+
+### Test Coverage
+
+| Package | Coverage | Notes |
+|---------|----------|-------|
+| `internal/proxy` | ~72% | Classifier fully tested; proxy integration tests use raw wire protocol |
+| `internal/sink` | ~45% | All decorators tested (retry, batch, DLQ); sink types are thin wrappers |
+| `internal/cdc` | ~13% | Requires a live Postgres with `wal_level=logical`; integration-tested manually |
+
+The CDC package is intentionally undertested in unit tests because `stream.go` and `snapshot.go` require a real PostgreSQL instance with logical replication enabled. These paths are exercised via end-to-end testing with `docker-compose up` and manual verification. The proxy and sink packages have proper unit and integration tests.
+
+### CI
+
+GitHub Actions runs `go vet`, `go build`, and `go test` on every push and PR. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## License
 

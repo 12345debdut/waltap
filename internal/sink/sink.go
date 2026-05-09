@@ -1,3 +1,26 @@
+// Package sink provides pluggable event delivery destinations for the CDC pipeline.
+//
+// Every destination implements the [Sink] interface (single-event delivery) or
+// the [BatchDeliverer] interface (batch delivery). Sinks compose via the
+// decorator pattern:
+//
+//	MetricsSink → RetrySink → WebhookSink       (single events, retried, instrumented)
+//	MetricsSink → BatchSink → WebhookBatchSink   (batched, instrumented)
+//
+// Available sinks:
+//
+//   - [StdoutSink] — NDJSON to stdout
+//   - [WebhookSink] — HTTP POST per event
+//   - [WebhookBatchSink] — HTTP POST per batch
+//   - [KafkaSink] — per-table Kafka topics
+//   - [StdoutBatchSink] — batched JSON to stdout
+//
+// Available decorators:
+//
+//   - [MetricsSink] — Prometheus counters, histograms, gauges
+//   - [RetrySink] — exponential backoff retry
+//   - [BatchSink] — size + time triggered batching
+//   - [DLQSink] — dead-letter queue for poison events
 package sink
 
 import (

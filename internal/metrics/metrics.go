@@ -1,3 +1,12 @@
+// Package metrics defines the Prometheus metrics for the pgcdc pipeline.
+//
+// All metrics use the "pgcdc_" prefix and follow Prometheus naming conventions.
+// They are registered via promauto, so they auto-register with the default
+// registry — no manual registration needed.
+//
+// These metrics are recorded by [sink.MetricsSink] (delivery duration, event
+// counts, replication lag) and [sink.DLQSink] (DLQ event counts). The metrics
+// HTTP endpoint is started in cmd/pgcdc/main.go.
 package metrics
 
 import (
