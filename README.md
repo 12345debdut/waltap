@@ -6,26 +6,19 @@ A Change Data Capture pipeline for PostgreSQL that taps into the Write-Ahead Log
 
 PostgreSQL's Write-Ahead Log (WAL) records every change before it hits disk. Logical decoding (via the `pgoutput` plugin) translates those raw WAL records into structured row-level events. waltap subscribes to this stream using the streaming replication protocol and delivers each event to a configurable sink.
 
-```
-PostgreSQL WAL
-     |
-     | logical replication (pgoutput)
-     v
-  waltap
-     |
-     +---> stdout (NDJSON)
-     +---> webhook (HTTP POST per event)
-     +---> webhook-batch (HTTP POST per batch)
-     +---> kafka (per-table topics)
-     +---> stdout-batch (JSON batches)
-```
+<p align="center">
+  <img src="docs/assets/waltap-architecture.svg" alt="waltap architecture — animated data flow from PostgreSQL WAL through Stream/Filter/Sink Chain to stdout, webhook, kafka and DLQ sinks" width="100%"/>
+</p>
 
-The proxy component sits between your application and PostgreSQL:
+<sub>↑ <em>The diagram is animated — change events flow from PostgreSQL through the pipeline and fan out to your sinks. Animations render directly on GitHub.</em></sub>
 
-```
-App --> pgproxy(:5434) --> Primary(:5433)   writes, transactions
-                       --> Replica(:5435)   standalone SELECTs
-```
+The proxy component sits between your application and PostgreSQL — parsing the wire protocol, classifying each query, and routing reads to the replica while writes and transactions stay on the primary:
+
+<p align="center">
+  <img src="docs/assets/waltap-proxy.svg" alt="waltap pgproxy — animated query routing showing SELECT going to replica and INSERT/UPDATE/BEGIN going to primary" width="100%"/>
+</p>
+
+<sub>↑ <em>The proxy classifies each SQL statement by its first keyword. Reads go to the replica, writes and transactions are pinned to the primary.</em></sub>
 
 ## Features
 
@@ -172,6 +165,26 @@ MetricsSink -> RetrySink (onFailure: -> DLQ) -> WebhookSink
 - **Inner sink** — the actual destination (stdout, webhook, kafka)
 
 The proxy uses pgx connection pools for backends and handles the PostgreSQL wire protocol directly for client connections. It classifies queries by inspecting the first SQL keyword and routes accordingly.
+
+## Learning
+
+A 16-slide walkthrough of the entire project — what WAL is, how logical replication works, the architecture, sink chain, delivery guarantees, batching, the proxy, the wire protocol, query routing, and observability. Each slide is shown for 2 seconds and the loop repeats every 32 seconds. No video, no GIF — pure animated SVG that renders directly here on GitHub.
+
+<p align="center">
+  <img src="docs/assets/waltap-deck-preview.svg" alt="waltap auto-advancing deck preview — 16 slides covering WAL fundamentals, the CDC architecture, sink chain, delivery guarantees, batching, the read/write split proxy, the Postgres wire protocol, query routing, observability and a closing reveal of the GitHub repo. Each slide displays for 2 seconds in a continuous loop." width="100%"/>
+</p>
+
+<sub>↑ <em>The deck auto-advances through all 16 slides. If the animation pauses, refresh the page — GitHub sometimes caches the first frame.</em></sub>
+
+Want the **fully interactive version**? The deck above is a preview baked into SVG. The full HTML deck at [`waltap-deck.html`](waltap-deck.html) has:
+
+- A clickable **architecture diagram** with live event-flow animation (▶ stream events button) and per-component detail panels
+- A **sink chain builder** — toggle `MetricsSink`, `RetrySink`, `BatchSink` on or off, swap destinations, and fire a particle through the chain you composed
+- A **live SQL classifier** — type any SQL and watch it route in real time to the primary or replica, with the matching classifier rule flashing green
+- Animated **Prometheus metric counters** that count up when the slide enters view
+- **Inline edit mode** — press `E`, click any text to edit, `Ctrl+S` to export the customized deck
+
+Clone the repo and open `waltap-deck.html` in a browser, or browse through the [docs/](docs/) directory below for the long-form write-ups behind each section.
 
 ## Documentation
 

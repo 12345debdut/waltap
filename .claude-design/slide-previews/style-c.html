@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Style C — Terminal Replication</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap">
+<style>
+:root{
+  --bg: #0d1117;
+  --bg-elev: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --text-dim: #8b949e;
+  --text-bright: #f0f6fc;
+  --green: #39d353;
+  --green-glow: rgba(57,211,83,0.15);
+  --blue: #58a6ff;
+  --orange: #ff8c5a;
+  --red: #f85149;
+  --yellow: #f0c674;
+  --magenta: #d2a8ff;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace}
+body::before{content:"";position:fixed;inset:0;background-image:repeating-linear-gradient(0deg,rgba(255,255,255,0.012) 0,rgba(255,255,255,0.012) 1px,transparent 1px,transparent 3px);pointer-events:none;z-index:1}
+.slide{width:100vw;height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:column;padding:clamp(1.5rem,3vw,2.5rem);position:relative;z-index:2;gap:clamp(0.8rem,1.5vw,1.2rem)}
+.title-bar{display:flex;align-items:center;gap:0.6rem;padding-bottom:0.6rem;border-bottom:1px solid var(--border);font-size:clamp(0.65rem,0.85vw,0.78rem);color:var(--text-dim)}
+.dot{width:11px;height:11px;border-radius:50%}
+.dot.r{background:#ff5f56}.dot.y{background:#ffbd2e}.dot.g{background:#27c93f}
+.title-bar .path{margin-left:auto;color:var(--text-dim)}
+.terminal{flex:1;display:flex;flex-direction:column;gap:clamp(0.5rem,1vw,0.8rem);font-size:clamp(0.75rem,1.1vw,0.95rem);line-height:1.6;overflow:hidden}
+.prompt{color:var(--green)}
+.cmd{color:var(--text-bright)}
+.dim{color:var(--text-dim)}
+.flag{color:var(--orange)}
+.str{color:var(--yellow)}
+.key{color:var(--blue)}
+.val{color:var(--magenta)}
+.banner{margin:clamp(0.6rem,1.2vw,1rem) 0;padding:clamp(1rem,2vw,1.6rem);border:1px solid var(--border);border-left:3px solid var(--green);background:linear-gradient(90deg,var(--green-glow) 0%,transparent 60%);position:relative}
+.banner-title{font-size:clamp(1.6rem,4.5vw,3.2rem);font-weight:700;color:var(--text-bright);letter-spacing:-0.02em;line-height:1.05;margin-bottom:0.4rem}
+.banner-title .accent{color:var(--green);text-shadow:0 0 18px var(--green-glow)}
+.banner-sub{font-size:clamp(0.7rem,1vw,0.85rem);color:var(--text-dim);line-height:1.6;max-width:80%}
+.banner-sub .hl{color:var(--text-bright)}
+.kv-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:clamp(0.4rem,0.8vw,0.6rem);font-size:clamp(0.65rem,0.85vw,0.78rem)}
+.kv{padding:clamp(0.5rem,1vw,0.7rem) clamp(0.7rem,1.2vw,1rem);border:1px solid var(--border);background:var(--bg-elev)}
+.kv .k{color:var(--text-dim);font-size:0.7em;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.2rem}
+.kv .v{color:var(--text-bright);font-weight:500}
+.status-line{display:flex;justify-content:space-between;align-items:center;padding-top:0.6rem;border-top:1px solid var(--border);font-size:clamp(0.62rem,0.82vw,0.72rem);color:var(--text-dim)}
+.status-line .live{color:var(--green);display:flex;align-items:center;gap:0.4rem}
+.status-line .live::before{content:"●";animation:blink 1.4s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:0.3}50%{opacity:1}}
+.cursor{display:inline-block;width:0.55em;height:1.1em;background:var(--green);vertical-align:text-bottom;animation:blink 1s steps(2,start) infinite}
+@keyframes fadeIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
+.line{animation:fadeIn 0.4s ease both}
+.l1{animation-delay:0.05s}.l2{animation-delay:0.2s}.l3{animation-delay:0.35s}.l4{animation-delay:0.5s}.l5{animation-delay:0.7s}.l6{animation-delay:0.9s}.l7{animation-delay:1.1s}.l8{animation-delay:1.25s}
+</style>
+</head>
+<body>
+<section class="slide">
+  <div class="title-bar line l1">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">~/projects/waltap — go run ./cmd/pgcdc — 80x24</span>
+  </div>
+  <div class="terminal">
+    <div class="line l2"><span class="prompt">$</span> <span class="cmd">go run</span> <span class="flag">./cmd/pgcdc</span> <span class="flag">--db</span> <span class="str">"postgres://lab:lab@localhost:5433/wallab"</span> <span class="flag">--sink</span> <span class="str">stdout</span></div>
+    <div class="line l3 dim">connected to postgres (replication mode)</div>
+    <div class="line l4 dim">publication "pgcdc_pub" exists · slot "pgcdc_slot" at LSN <span class="val">0/19CFB20</span></div>
+    <div class="line l5 dim">streaming started — waiting for changes...</div>
+
+    <div class="banner line l6">
+      <div class="banner-title">walt<span class="accent">ap</span><span class="cursor"></span></div>
+      <div class="banner-sub">A <span class="hl">Change Data Capture</span> pipeline for PostgreSQL — taps the Write-Ahead Log via logical replication, decodes row-level events, and delivers them to <span class="hl">pluggable sinks</span>. Ships with a wire-protocol proxy for read/write split.</div>
+    </div>
+
+    <div class="kv-grid line l7">
+      <div class="kv"><div class="k">LANG</div><div class="v">Go 1.25</div></div>
+      <div class="kv"><div class="k">PROTOCOL</div><div class="v">pgoutput v1</div></div>
+      <div class="kv"><div class="k">SINKS</div><div class="v">stdout · webhook · kafka</div></div>
+      <div class="kv"><div class="k">PROXY</div><div class="v">Postgres wire protocol</div></div>
+    </div>
+  </div>
+  <div class="status-line line l8">
+    <span class="live">streaming · 0/19CFB20</span>
+    <span>github.com/12345debdut/waltap</span>
+    <span>↑↓ navigate · space next</span>
+  </div>
+</section>
+</body>
+</html>

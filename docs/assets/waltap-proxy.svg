@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" width="1200" height="500" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace">
+  <!--
+    waltap — Read/Write Split Proxy (animated)
+    Shows SQL queries being classified and routed to either replica or primary
+  -->
+  <defs>
+    <linearGradient id="pbg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#010409"/>
+    </linearGradient>
+    <linearGradient id="proxy-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#39d353" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#39d353" stop-opacity="0.05"/>
+    </linearGradient>
+    <linearGradient id="primary-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f85149" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#f85149" stop-opacity="0.05"/>
+    </linearGradient>
+    <linearGradient id="replica-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#58a6ff" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#58a6ff" stop-opacity="0.05"/>
+    </linearGradient>
+
+    <filter id="pglow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <pattern id="pgrid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,255,255,0.02)" stroke-width="1"/>
+    </pattern>
+
+    <!-- packet shapes for the 3 query types -->
+    <g id="pkt-read">
+      <rect x="-26" y="-10" width="52" height="20" rx="2" fill="rgba(88,166,255,0.18)" stroke="#58a6ff" stroke-width="1"/>
+      <text y="4" text-anchor="middle" fill="#58a6ff" font-size="10" font-weight="600">SELECT</text>
+    </g>
+    <g id="pkt-write">
+      <rect x="-26" y="-10" width="52" height="20" rx="2" fill="rgba(248,81,73,0.18)" stroke="#f85149" stroke-width="1"/>
+      <text y="4" text-anchor="middle" fill="#f85149" font-size="10" font-weight="600">INSERT</text>
+    </g>
+    <g id="pkt-update">
+      <rect x="-26" y="-10" width="52" height="20" rx="2" fill="rgba(248,81,73,0.18)" stroke="#f85149" stroke-width="1"/>
+      <text y="4" text-anchor="middle" fill="#f85149" font-size="10" font-weight="600">UPDATE</text>
+    </g>
+    <g id="pkt-txn">
+      <rect x="-26" y="-10" width="52" height="20" rx="2" fill="rgba(240,198,116,0.18)" stroke="#f0c674" stroke-width="1"/>
+      <text y="4" text-anchor="middle" fill="#f0c674" font-size="10" font-weight="600">BEGIN</text>
+    </g>
+  </defs>
+
+  <style>
+    @keyframes dash { to { stroke-dashoffset: -20; } }
+    @keyframes pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
+    .flow-line { stroke-dasharray: 4 4; animation: dash 1.2s linear infinite; }
+    .live-dot { animation: pulse 1.6s ease-in-out infinite; }
+    .lbl-mono { font-size: 13px; fill: #f0f6fc; font-weight: 600; }
+    .lbl-ann  { font-size: 10px; fill: #8b949e; }
+    .lbl-hdr  { font-size: 11px; fill: #8b949e; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 500; }
+    .lbl-title { font-size: 18px; fill: #f0f6fc; font-weight: 700; letter-spacing: -0.5px; }
+    .acc { fill: #39d353; }
+  </style>
+
+  <!-- background -->
+  <rect width="1200" height="500" fill="url(#pbg)"/>
+  <rect width="1200" height="500" fill="url(#pgrid)"/>
+
+  <!-- title bar -->
+  <g>
+    <rect width="1200" height="36" fill="#161b22" stroke="#30363d"/>
+    <circle cx="20" cy="18" r="6" fill="#ff5f56"/>
+    <circle cx="40" cy="18" r="6" fill="#ffbd2e"/>
+    <circle cx="60" cy="18" r="6" fill="#27c93f"/>
+    <text x="600" y="22" text-anchor="middle" class="lbl-ann" font-size="11">waltap — pgproxy · read/write split routing</text>
+    <g transform="translate(1180,18)">
+      <circle cx="-110" cy="0" r="3" fill="#39d353" class="live-dot"/>
+      <text x="-100" y="4" class="lbl-ann" font-size="10">proxy active · :5434</text>
+    </g>
+  </g>
+
+  <!-- title -->
+  <g transform="translate(40,60)">
+    <text class="lbl-hdr">pgproxy · parse the postgres wire protocol, route queries</text>
+    <text y="22" class="lbl-title">SELECTs <tspan class="acc">→</tspan> replica · writes &amp; transactions <tspan class="acc">→</tspan> primary</text>
+  </g>
+
+  <!-- ===== CLIENT ===== -->
+  <g transform="translate(50,230)">
+    <rect width="160" height="80" rx="3" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+    <text x="80" y="32" text-anchor="middle" class="lbl-mono">Client</text>
+    <text x="80" y="50" text-anchor="middle" class="lbl-ann">app / psql</text>
+    <text x="80" y="65" text-anchor="middle" class="lbl-ann">connects :5434</text>
+  </g>
+
+  <!-- ===== PROXY ===== -->
+  <g transform="translate(420,210)">
+    <rect width="220" height="120" rx="3" fill="url(#proxy-grad)" stroke="#39d353" stroke-width="1.5"/>
+    <rect x="0" y="0" width="3" height="120" fill="#39d353"/>
+    <text x="110" y="32" text-anchor="middle" class="lbl-mono" font-size="15">pgproxy</text>
+    <text x="110" y="50" text-anchor="middle" class="lbl-ann">:5434</text>
+    <line x1="20" y1="58" x2="200" y2="58" stroke="#30363d" stroke-width="1"/>
+    <text x="110" y="74" text-anchor="middle" class="lbl-ann">parse pgwire</text>
+    <text x="110" y="89" text-anchor="middle" class="lbl-ann">classify SQL</text>
+    <text x="110" y="104" text-anchor="middle" class="lbl-ann">pin transactions</text>
+  </g>
+
+  <!-- ===== PRIMARY ===== -->
+  <g transform="translate(950,140)">
+    <rect width="200" height="80" rx="3" fill="url(#primary-grad)" stroke="#f85149" stroke-width="1.5"/>
+    <rect x="0" y="0" width="200" height="3" fill="#f85149"/>
+    <text x="100" y="32" text-anchor="middle" class="lbl-mono">Primary</text>
+    <text x="100" y="50" text-anchor="middle" class="lbl-ann" fill="#f85149">writable · :5433</text>
+    <text x="100" y="65" text-anchor="middle" class="lbl-ann">INSERT · UPDATE · DELETE · TXN</text>
+  </g>
+
+  <!-- ===== REPLICA ===== -->
+  <g transform="translate(950,330)">
+    <rect width="200" height="80" rx="3" fill="url(#replica-grad)" stroke="#58a6ff" stroke-width="1.5"/>
+    <rect x="0" y="0" width="200" height="3" fill="#58a6ff"/>
+    <text x="100" y="32" text-anchor="middle" class="lbl-mono">Replica</text>
+    <text x="100" y="50" text-anchor="middle" class="lbl-ann" fill="#58a6ff">read-only · :5435</text>
+    <text x="100" y="65" text-anchor="middle" class="lbl-ann">SELECT · SHOW · EXPLAIN</text>
+  </g>
+
+  <!-- Connector lines (client → proxy) -->
+  <line x1="210" y1="270" x2="420" y2="270" stroke="#39d353" stroke-width="1.5" class="flow-line"/>
+
+  <!-- Connector lines (proxy → primary and proxy → replica) - angled -->
+  <path d="M 640 250 L 760 250 L 760 180 L 950 180" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4 4" fill="none" class="flow-line"/>
+  <path d="M 640 290 L 760 290 L 760 370 L 950 370" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="4 4" fill="none" class="flow-line"/>
+
+  <!-- route labels -->
+  <text x="780" y="160" class="lbl-ann" fill="#f85149">WRITE · TXN</text>
+  <text x="780" y="403" class="lbl-ann" fill="#58a6ff">READ</text>
+
+  <!-- ===== ANIMATED QUERY PACKETS ===== -->
+  <!-- SELECT goes to replica (down path) -->
+  <g>
+    <use href="#pkt-read">
+      <animateMotion dur="3.5s" repeatCount="indefinite" rotate="0">
+        <mpath href="#route-read"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="0;1;1;1;0" keyTimes="0;0.08;0.5;0.9;1" dur="3.5s" repeatCount="indefinite"/>
+    </use>
+  </g>
+  <!-- INSERT goes to primary (up path) -->
+  <g>
+    <use href="#pkt-write">
+      <animateMotion dur="3.5s" begin="0.9s" repeatCount="indefinite" rotate="0">
+        <mpath href="#route-write"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="0;1;1;1;0" keyTimes="0;0.08;0.5;0.9;1" dur="3.5s" begin="0.9s" repeatCount="indefinite"/>
+    </use>
+  </g>
+  <!-- UPDATE goes to primary -->
+  <g>
+    <use href="#pkt-update">
+      <animateMotion dur="3.5s" begin="1.8s" repeatCount="indefinite" rotate="0">
+        <mpath href="#route-write"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="0;1;1;1;0" keyTimes="0;0.08;0.5;0.9;1" dur="3.5s" begin="1.8s" repeatCount="indefinite"/>
+    </use>
+  </g>
+  <!-- BEGIN goes to primary (transaction) -->
+  <g>
+    <use href="#pkt-txn">
+      <animateMotion dur="3.5s" begin="2.7s" repeatCount="indefinite" rotate="0">
+        <mpath href="#route-write"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="0;1;1;1;0" keyTimes="0;0.08;0.5;0.9;1" dur="3.5s" begin="2.7s" repeatCount="indefinite"/>
+    </use>
+  </g>
+
+  <!-- invisible motion paths matching the visible lines -->
+  <!-- Client(130,270) → Proxy(530,270) → routes -->
+  <path id="route-read"  d="M 130 270 L 530 270 L 760 290 L 1050 370" fill="none" stroke="none"/>
+  <path id="route-write" d="M 130 270 L 530 270 L 760 250 L 1050 180" fill="none" stroke="none"/>
+
+  <!-- ===== CLASSIFICATION TABLE ===== -->
+  <g transform="translate(40,450)">
+    <text class="lbl-hdr" font-size="9">classifier · first SQL keyword</text>
+  </g>
+  <g transform="translate(160,447)" font-size="10">
+    <rect x="-4" y="-10" width="155" height="16" fill="rgba(88,166,255,0.1)" stroke="#58a6ff" stroke-width="0.8" rx="2"/>
+    <text x="74" y="2" text-anchor="middle" fill="#58a6ff" font-weight="600">SELECT · SHOW · EXPLAIN</text>
+    <text x="160" y="2" class="lbl-ann">→ replica</text>
+  </g>
+  <g transform="translate(440,447)" font-size="10">
+    <rect x="-4" y="-10" width="180" height="16" fill="rgba(248,81,73,0.1)" stroke="#f85149" stroke-width="0.8" rx="2"/>
+    <text x="86" y="2" text-anchor="middle" fill="#f85149" font-weight="600">INSERT · UPDATE · DELETE · DDL</text>
+    <text x="185" y="2" class="lbl-ann">→ primary</text>
+  </g>
+  <g transform="translate(750,447)" font-size="10">
+    <rect x="-4" y="-10" width="155" height="16" fill="rgba(240,198,116,0.1)" stroke="#f0c674" stroke-width="0.8" rx="2"/>
+    <text x="74" y="2" text-anchor="middle" fill="#f0c674" font-weight="600">BEGIN · COMMIT · ROLLBACK</text>
+    <text x="160" y="2" class="lbl-ann">→ primary · pin</text>
+  </g>
+
+  <!-- footer -->
+  <text x="1180" y="478" text-anchor="end" class="lbl-ann" font-size="10">github.com/12345debdut/waltap</text>
+</svg>

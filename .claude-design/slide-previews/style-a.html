@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Style A — Bold Signal</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+:root{
+  --bg: #0d0d0d;
+  --bg-gradient: radial-gradient(ellipse at 30% 20%, #1f1f1f 0%, #0d0d0d 50%);
+  --card: #FF5722;
+  --card-shadow: #c0410e;
+  --text: #ffffff;
+  --text-dim: rgba(255,255,255,0.5);
+  --on-card: #0d0d0d;
+  --accent-line: #FF5722;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:'Space Grotesk',sans-serif}
+.slide{width:100vw;height:100vh;height:100dvh;overflow:hidden;display:grid;grid-template-columns:1fr 1.4fr;background:var(--bg-gradient);position:relative;padding:clamp(2rem,4vw,4rem);gap:clamp(1.5rem,3vw,3rem)}
+.slide::before{content:"";position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.025) 1px,transparent 1px);background-size:60px 60px;pointer-events:none}
+.left-col{display:flex;flex-direction:column;justify-content:space-between;position:relative;z-index:2}
+.brand{display:flex;align-items:center;gap:0.6rem;font-family:'JetBrains Mono',monospace;font-size:clamp(0.7rem,1vw,0.85rem);letter-spacing:0.2em;text-transform:uppercase;color:var(--text-dim)}
+.brand::before{content:"";width:8px;height:8px;background:var(--accent-line);border-radius:50%}
+.section-num{font-family:'Archivo Black';font-size:clamp(3.5rem,9vw,7rem);line-height:0.9;color:var(--text);letter-spacing:-0.04em}
+.section-num span{color:var(--accent-line)}
+.meta{font-family:'JetBrains Mono',monospace;font-size:clamp(0.6rem,0.85vw,0.78rem);color:var(--text-dim);line-height:1.7;letter-spacing:0.05em}
+.meta-row{display:flex;gap:0.8rem}
+.meta-row strong{color:var(--text);font-weight:400}
+.right-col{position:relative;z-index:2;display:flex;align-items:center}
+.card{background:var(--card);padding:clamp(2rem,4vw,3.5rem);border-radius:4px;width:100%;height:100%;display:flex;flex-direction:column;justify-content:space-between;box-shadow:12px 12px 0 var(--card-shadow);position:relative;overflow:hidden}
+.card::after{content:"";position:absolute;bottom:0;right:0;width:40%;height:40%;background:radial-gradient(circle at bottom right,rgba(0,0,0,0.15),transparent 70%)}
+.card-tag{font-family:'JetBrains Mono',monospace;font-size:clamp(0.7rem,1vw,0.85rem);color:var(--on-card);opacity:0.7;letter-spacing:0.15em;text-transform:uppercase}
+.card-title{font-family:'Archivo Black';font-size:clamp(2.2rem,5.5vw,4.5rem);line-height:0.95;color:var(--on-card);letter-spacing:-0.03em;margin-top:0.5rem}
+.card-sub{font-family:'Space Grotesk';font-weight:500;font-size:clamp(0.9rem,1.4vw,1.15rem);color:var(--on-card);opacity:0.85;line-height:1.4;max-width:90%}
+.nav-arrow{position:absolute;bottom:clamp(2rem,4vw,4rem);right:clamp(2rem,4vw,4rem);display:flex;align-items:center;gap:0.5rem;font-family:'JetBrains Mono',monospace;font-size:0.75rem;color:var(--on-card);letter-spacing:0.1em;text-transform:uppercase;z-index:3}
+.nav-arrow svg{width:18px;height:18px}
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.reveal{animation:fadeUp 0.7s cubic-bezier(0.16,1,0.3,1) both}
+.r1{animation-delay:0.1s}.r2{animation-delay:0.25s}.r3{animation-delay:0.4s}.r4{animation-delay:0.55s}.r5{animation-delay:0.7s}
+</style>
+</head>
+<body>
+<section class="slide">
+  <div class="left-col">
+    <div class="brand reveal r1">WAL Deep Dive / 2026</div>
+    <div class="section-num reveal r2">01<span>.</span></div>
+    <div class="meta reveal r3">
+      <div class="meta-row"><strong>STACK</strong> Go · PostgreSQL · pgoutput</div>
+      <div class="meta-row"><strong>TYPE</strong> CDC pipeline + RW proxy</div>
+      <div class="meta-row"><strong>AUTHOR</strong> Debdut Saha</div>
+    </div>
+  </div>
+  <div class="right-col">
+    <div class="card reveal r4">
+      <div>
+        <div class="card-tag">Open Source · Built in Go</div>
+        <div class="card-title">waltap</div>
+      </div>
+      <div class="card-sub">Tapping into PostgreSQL's Write-Ahead Log to deliver row-level change events — and a wire-protocol proxy that splits reads from writes.</div>
+    </div>
+  </div>
+</section>
+</body>
+</html>

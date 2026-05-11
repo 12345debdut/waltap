@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Style B — Postgres Studio</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+:root{
+  --bg-top: #ffffff;
+  --bg-bottom: #2c5282;
+  --postgres-blue: #336791;
+  --postgres-deep: #1d3557;
+  --accent: #fbbf24;
+  --text-dark: #0a0a0a;
+  --text-light: #ffffff;
+  --text-dim-dark: rgba(10,10,10,0.55);
+  --text-dim-light: rgba(255,255,255,0.7);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden;font-family:'Manrope',sans-serif}
+.slide{width:100vw;height:100vh;height:100dvh;overflow:hidden;display:grid;grid-template-rows:1fr 1fr;position:relative}
+.top{background:var(--bg-top);color:var(--text-dark);padding:clamp(2rem,4vw,4rem);display:flex;flex-direction:column;justify-content:space-between;position:relative;border-bottom:3px solid var(--accent)}
+.bottom{background:linear-gradient(135deg,var(--postgres-blue) 0%,var(--postgres-deep) 100%);color:var(--text-light);padding:clamp(2rem,4vw,4rem);display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden}
+.bottom::before{content:"";position:absolute;top:-50%;right:-10%;width:80%;height:200%;background:radial-gradient(ellipse,rgba(251,191,36,0.08) 0%,transparent 60%);pointer-events:none}
+.bottom::after{content:"";position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.03) 1px,transparent 1px);background-size:48px 48px;pointer-events:none}
+.brand-row{display:flex;justify-content:space-between;align-items:center;font-family:'JetBrains Mono',monospace;font-size:clamp(0.65rem,0.9vw,0.8rem);letter-spacing:0.2em;text-transform:uppercase}
+.brand-row .left{color:var(--text-dim-dark);display:flex;align-items:center;gap:0.6rem}
+.brand-row .left::before{content:"";width:8px;height:8px;background:var(--postgres-blue);border-radius:1px;display:inline-block}
+.brand-row .right{color:var(--text-dim-dark)}
+.eyebrow{font-family:'JetBrains Mono',monospace;font-size:clamp(0.7rem,1vw,0.85rem);color:var(--postgres-blue);letter-spacing:0.25em;text-transform:uppercase;font-weight:700;margin-bottom:0.8rem}
+.headline{font-family:'Manrope';font-weight:800;font-size:clamp(2.5rem,7vw,5.5rem);line-height:0.95;color:var(--text-dark);letter-spacing:-0.04em}
+.headline em{font-style:normal;color:var(--postgres-blue);position:relative;display:inline-block}
+.headline em::after{content:"";position:absolute;left:0;bottom:0.08em;height:0.12em;width:100%;background:var(--accent);z-index:-1}
+.bottom-row{display:flex;align-items:flex-end;justify-content:space-between;gap:2rem;position:relative;z-index:2}
+.tagline{font-size:clamp(1rem,1.8vw,1.5rem);font-weight:500;line-height:1.35;max-width:60%;color:var(--text-light)}
+.tagline strong{color:var(--accent);font-weight:700}
+.meta-block{font-family:'JetBrains Mono',monospace;font-size:clamp(0.6rem,0.85vw,0.78rem);color:var(--text-dim-light);text-align:right;line-height:1.8;letter-spacing:0.05em}
+.meta-block strong{color:var(--text-light);font-weight:400}
+.lsn-bar{position:absolute;top:clamp(2rem,4vw,4rem);right:clamp(2rem,4vw,4rem);font-family:'JetBrains Mono',monospace;font-size:clamp(0.6rem,0.85vw,0.75rem);color:var(--text-dim-light);letter-spacing:0.1em;z-index:2;display:flex;align-items:center;gap:0.6rem}
+.lsn-bar .dot{width:6px;height:6px;background:var(--accent);border-radius:50%;animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:0.4}50%{opacity:1}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.reveal{animation:fadeUp 0.65s cubic-bezier(0.16,1,0.3,1) both}
+.r1{animation-delay:0.05s}.r2{animation-delay:0.2s}.r3{animation-delay:0.35s}.r4{animation-delay:0.5s}.r5{animation-delay:0.65s}.r6{animation-delay:0.8s}
+</style>
+</head>
+<body>
+<section class="slide">
+  <div class="top">
+    <div class="brand-row reveal r1">
+      <span class="left">waltap · open source</span>
+      <span class="right">01 / 14</span>
+    </div>
+    <div>
+      <div class="eyebrow reveal r2">A Postgres CDC story</div>
+      <div class="headline reveal r3">From WAL bytes<br>to <em>real events</em></div>
+    </div>
+  </div>
+  <div class="bottom">
+    <div class="lsn-bar reveal r4"><span class="dot"></span>STREAMING · LSN 0/19CFB20</div>
+    <div class="bottom-row">
+      <p class="tagline reveal r5">A Change Data Capture pipeline + read/write split proxy <strong>built in Go</strong>, learning Postgres from the inside out.</p>
+      <div class="meta-block reveal r6">
+        DEBDUT SAHA<br>
+        BACKEND ENGINEER<br>
+        <strong>github.com/12345debdut/waltap</strong>
+      </div>
+    </div>
+  </div>
+</section>
+</body>
+</html>

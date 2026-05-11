@@ -1,0 +1,2244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>waltap — Tapping into the Postgres WAL</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap">
+<style>
+/* ===========================================
+   THEME — Terminal Replication
+   Inspired by IDE/terminal aesthetics
+   =========================================== */
+:root{
+  --bg: #0d1117;
+  --bg-elev: #161b22;
+  --bg-deep: #010409;
+  --border: #30363d;
+  --border-soft: #21262d;
+  --text: #c9d1d9;
+  --text-dim: #8b949e;
+  --text-bright: #f0f6fc;
+  --green: #39d353;
+  --green-glow: rgba(57,211,83,0.15);
+  --blue: #58a6ff;
+  --blue-glow: rgba(88,166,255,0.15);
+  --orange: #ff8c5a;
+  --red: #f85149;
+  --yellow: #f0c674;
+  --magenta: #d2a8ff;
+  --postgres: #336791;
+
+  /* Animation */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* ===========================================
+   VIEWPORT FITTING (mandatory base)
+   =========================================== */
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow-x:hidden;background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;-webkit-font-smoothing:antialiased}
+html{scroll-snap-type:y mandatory;scroll-behavior:smooth}
+body::before{content:"";position:fixed;inset:0;background-image:repeating-linear-gradient(0deg,rgba(255,255,255,0.012) 0,rgba(255,255,255,0.012) 1px,transparent 1px,transparent 3px);pointer-events:none;z-index:1}
+
+.slide{width:100vw;height:100vh;height:100dvh;overflow:hidden;scroll-snap-align:start;display:flex;flex-direction:column;position:relative;z-index:2;padding:clamp(1.2rem,2.5vw,2.2rem) clamp(1.5rem,3vw,2.5rem)}
+
+/* Type scale (clamp-based) */
+:root{
+  --title-size: clamp(1.5rem, 4.5vw, 3.8rem);
+  --h2-size: clamp(1.1rem, 2.6vw, 2rem);
+  --h3-size: clamp(0.95rem, 1.6vw, 1.3rem);
+  --body-size: clamp(0.72rem, 1vw, 0.92rem);
+  --small-size: clamp(0.6rem, 0.8vw, 0.75rem);
+  --tiny-size: clamp(0.55rem, 0.7vw, 0.68rem);
+  --content-gap: clamp(0.6rem, 1.4vw, 1.2rem);
+}
+
+/* Terminal window chrome at top of every slide */
+.title-bar{display:flex;align-items:center;gap:0.5rem;padding-bottom:0.5rem;border-bottom:1px solid var(--border);font-size:var(--tiny-size);color:var(--text-dim);flex-shrink:0}
+.dot{width:10px;height:10px;border-radius:50%}
+.dot.r{background:#ff5f56}.dot.y{background:#ffbd2e}.dot.g{background:#27c93f}
+.title-bar .path{margin-left:auto;color:var(--text-dim);letter-spacing:0.04em}
+.title-bar .slide-num{margin-left:0.6rem;color:var(--text-dim);opacity:0.7}
+
+/* Status bar at bottom */
+.status-bar{display:flex;justify-content:space-between;align-items:center;padding-top:0.5rem;border-top:1px solid var(--border);font-size:var(--tiny-size);color:var(--text-dim);flex-shrink:0;letter-spacing:0.05em}
+.status-bar .live{color:var(--green);display:flex;align-items:center;gap:0.4rem}
+.status-bar .live::before{content:"●";animation:blink 1.4s ease-in-out infinite}
+.status-bar .repo{color:var(--text-dim)}
+.status-bar .repo strong{color:var(--text-bright);font-weight:500}
+
+/* Main content area */
+.content{flex:1;display:flex;flex-direction:column;justify-content:center;padding:clamp(0.6rem,1.2vw,1rem) 0;overflow:hidden;gap:var(--content-gap);min-height:0}
+
+/* ===========================================
+   ANIMATIONS — reveal on scroll
+   =========================================== */
+.reveal{opacity:0;transform:translateY(20px);transition:opacity 0.7s var(--ease-out),transform 0.7s var(--ease-out)}
+.slide.visible .reveal{opacity:1;transform:translateY(0)}
+.slide.visible .reveal:nth-child(1){transition-delay:0.05s}
+.slide.visible .reveal:nth-child(2){transition-delay:0.15s}
+.slide.visible .reveal:nth-child(3){transition-delay:0.25s}
+.slide.visible .reveal:nth-child(4){transition-delay:0.35s}
+.slide.visible .reveal:nth-child(5){transition-delay:0.45s}
+.slide.visible .reveal:nth-child(6){transition-delay:0.55s}
+.slide.visible .reveal:nth-child(7){transition-delay:0.65s}
+.slide.visible .reveal:nth-child(8){transition-delay:0.75s}
+
+.reveal-left{opacity:0;transform:translateX(-30px);transition:opacity 0.7s var(--ease-out),transform 0.7s var(--ease-out)}
+.slide.visible .reveal-left{opacity:1;transform:translateX(0)}
+.reveal-scale{opacity:0;transform:scale(0.95);transition:opacity 0.7s var(--ease-out),transform 0.7s var(--ease-out)}
+.slide.visible .reveal-scale{opacity:1;transform:scale(1)}
+
+@keyframes blink{0%,100%{opacity:0.3}50%{opacity:1}}
+@keyframes pulse{0%,100%{opacity:0.5;transform:scale(1)}50%{opacity:1;transform:scale(1.08)}}
+@keyframes typing{from{width:0}to{width:100%}}
+@keyframes cursor{0%,100%{opacity:0}50%{opacity:1}}
+@keyframes flow-right{0%{transform:translateX(-100%);opacity:0}10%{opacity:1}90%{opacity:1}100%{transform:translateX(100%);opacity:0}}
+@keyframes dash-flow{to{stroke-dashoffset:-30}}
+@keyframes counter-pop{0%{transform:scale(1)}50%{transform:scale(1.06);color:var(--green)}100%{transform:scale(1)}}
+
+/* ===========================================
+   COMMON COMPONENTS
+   =========================================== */
+.prompt{color:var(--green)}
+.cmd{color:var(--text-bright);font-weight:500}
+.dim{color:var(--text-dim)}
+.flag{color:var(--orange)}
+.str{color:var(--yellow)}
+.key{color:var(--blue)}
+.val{color:var(--magenta)}
+.kw{color:var(--red);font-weight:500}
+.comment{color:var(--text-dim);font-style:italic;opacity:0.75}
+.bright{color:var(--text-bright)}
+.accent{color:var(--green)}
+
+.cursor-blink{display:inline-block;width:0.5em;height:1.05em;background:var(--green);vertical-align:text-bottom;animation:cursor 1s steps(2,start) infinite}
+
+/* Section banner (slide title) */
+.section-banner{padding:clamp(0.8rem,1.4vw,1.2rem) clamp(1rem,2vw,1.6rem);border:1px solid var(--border);border-left:3px solid var(--green);background:linear-gradient(90deg,var(--green-glow) 0%,transparent 60%)}
+.section-banner .eyebrow{font-size:var(--tiny-size);color:var(--text-dim);letter-spacing:0.2em;text-transform:uppercase;margin-bottom:0.4rem}
+.section-banner h2{font-size:var(--h2-size);color:var(--text-bright);font-weight:700;line-height:1.1;letter-spacing:-0.01em}
+.section-banner h2 .hl{color:var(--green)}
+.section-banner .sub{margin-top:0.4rem;font-size:var(--body-size);color:var(--text-dim);line-height:1.5;max-width:80ch}
+
+/* Key/value tiles */
+.kv-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,160px),1fr));gap:clamp(0.4rem,0.8vw,0.6rem);font-size:var(--small-size)}
+.kv{padding:clamp(0.5rem,1vw,0.7rem) clamp(0.7rem,1.2vw,1rem);border:1px solid var(--border);background:var(--bg-elev)}
+.kv .k{color:var(--text-dim);font-size:0.7em;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.2rem}
+.kv .v{color:var(--text-bright);font-weight:500;font-size:0.95em}
+.kv.accent-g{border-left:2px solid var(--green)}
+.kv.accent-b{border-left:2px solid var(--blue)}
+.kv.accent-o{border-left:2px solid var(--orange)}
+.kv.accent-m{border-left:2px solid var(--magenta)}
+
+/* Code block */
+.codeblock{padding:clamp(0.8rem,1.5vw,1.2rem) clamp(1rem,2vw,1.6rem);border:1px solid var(--border);background:var(--bg-deep);font-size:var(--body-size);line-height:1.7;overflow:hidden}
+.codeblock .ln{display:block}
+.codeblock .ln::before{content:attr(data-ln);display:inline-block;width:2em;color:var(--text-dim);opacity:0.5;margin-right:0.8em;text-align:right;user-select:none}
+
+/* Big number callout */
+.bignum{font-size:clamp(3rem,8vw,6rem);line-height:0.9;font-weight:700;color:var(--text-bright);letter-spacing:-0.04em}
+.bignum .accent{color:var(--green)}
+
+/* Two-column */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:clamp(0.8rem,1.6vw,1.4rem);align-items:stretch}
+.two-col.uneven{grid-template-columns:1fr 1.2fr}
+.three-col{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(0.8rem,1.6vw,1.4rem);align-items:stretch}
+
+/* Step labels */
+.step-row{display:flex;align-items:center;gap:0.8rem;padding:0.5rem 0;font-size:var(--body-size)}
+.step-num{flex-shrink:0;width:1.8em;height:1.8em;border:1px solid var(--green);color:var(--green);display:flex;align-items:center;justify-content:center;font-size:0.85em;font-weight:600;border-radius:2px;background:var(--green-glow)}
+
+/* ===========================================
+   SLIDE-SPECIFIC: TITLE
+   =========================================== */
+.banner-hero{padding:clamp(1.4rem,2.6vw,2rem) clamp(1.4rem,2.6vw,2rem);border:1px solid var(--border);border-left:4px solid var(--green);background:linear-gradient(90deg,var(--green-glow) 0%,transparent 70%);position:relative}
+.banner-hero .title{font-size:clamp(2.2rem,6.5vw,4.8rem);font-weight:700;color:var(--text-bright);letter-spacing:-0.03em;line-height:0.95;margin-bottom:0.6rem}
+.banner-hero .title .accent{color:var(--green);text-shadow:0 0 22px var(--green-glow)}
+.banner-hero .sub{font-size:clamp(0.85rem,1.3vw,1.05rem);color:var(--text-dim);line-height:1.55;max-width:75ch}
+.banner-hero .sub .hl{color:var(--text-bright)}
+
+/* ===========================================
+   SLIDE-SPECIFIC: WAL HOOK
+   =========================================== */
+.hook-quote{font-size:clamp(1.4rem,3.8vw,3rem);line-height:1.15;letter-spacing:-0.01em;font-weight:500;color:var(--text-bright);max-width:25ch}
+.hook-quote .strike{text-decoration:line-through;text-decoration-color:var(--red);text-decoration-thickness:0.08em;color:var(--text-dim)}
+.hook-quote .replace{color:var(--green);position:relative;display:inline-block}
+
+.flow-diagram{display:grid;grid-template-columns:1fr auto 1fr;gap:clamp(0.6rem,1.2vw,1rem);align-items:center;padding:clamp(0.8rem,1.5vw,1.2rem);border:1px solid var(--border);background:var(--bg-elev)}
+.flow-card{padding:clamp(0.6rem,1.2vw,1rem);border:1px solid var(--border);background:var(--bg-deep);text-align:center}
+.flow-card .label{font-size:var(--tiny-size);color:var(--text-dim);text-transform:uppercase;letter-spacing:0.15em;margin-bottom:0.3rem}
+.flow-card .val{font-size:var(--h3-size);color:var(--text-bright);font-weight:600}
+.flow-card.accent{border-color:var(--green);background:var(--green-glow)}
+.flow-card.accent .val{color:var(--green)}
+.flow-arrow{font-size:1.4em;color:var(--green);font-weight:700}
+
+/* ===========================================
+   SLIDE-SPECIFIC: WAL ANIMATION
+   =========================================== */
+.wal-track{position:relative;height:clamp(50px,8vh,80px);background:var(--bg-deep);border:1px solid var(--border);overflow:hidden;border-radius:2px}
+.wal-track .label{position:absolute;top:0.4rem;left:0.6rem;font-size:var(--tiny-size);color:var(--text-dim);letter-spacing:0.1em;z-index:2}
+.wal-record{position:absolute;top:50%;transform:translateY(-50%);padding:0.3rem 0.7rem;background:var(--green-glow);border:1px solid var(--green);color:var(--green);font-size:var(--tiny-size);font-weight:600;border-radius:2px;animation:flow-right 4s linear infinite;white-space:nowrap}
+.wal-record:nth-child(2){animation-delay:0s}
+.wal-record:nth-child(3){animation-delay:1s}
+.wal-record:nth-child(4){animation-delay:2s}
+.wal-record:nth-child(5){animation-delay:3s}
+
+/* ===========================================
+   SLIDE-SPECIFIC: TRANSFORM (PHYSICAL→LOGICAL)
+   =========================================== */
+.transform-grid{display:grid;grid-template-columns:1fr auto 1fr;gap:clamp(0.8rem,1.6vw,1.4rem);align-items:center}
+.transform-panel{padding:clamp(1rem,1.8vw,1.4rem);border:1px solid var(--border);background:var(--bg-elev);font-size:var(--body-size);min-height:clamp(140px,18vh,200px);display:flex;flex-direction:column;gap:0.5rem}
+.transform-panel .panel-label{font-size:var(--tiny-size);color:var(--text-dim);text-transform:uppercase;letter-spacing:0.15em;margin-bottom:0.4rem}
+.transform-panel.physical{opacity:0.65}
+.transform-panel.physical pre{color:var(--text-dim);white-space:pre-wrap;word-break:break-all;line-height:1.55}
+.transform-panel.logical{border-color:var(--green);background:linear-gradient(135deg,var(--green-glow) 0%,transparent 80%)}
+.transform-panel.logical pre{color:var(--text-bright);line-height:1.55}
+.transform-arrow{display:flex;flex-direction:column;align-items:center;gap:0.5rem;color:var(--green)}
+.transform-arrow .arrow-label{font-size:var(--tiny-size);letter-spacing:0.2em;text-transform:uppercase;writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg)}
+.transform-arrow .arrow-icon{font-size:1.8em;font-weight:700}
+
+/* ===========================================
+   SEQUENCE DIAGRAM
+   =========================================== */
+.seq-diagram{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--border);background:var(--bg-elev);position:relative;padding:clamp(0.8rem,1.5vw,1.2rem) 0}
+.seq-actor{text-align:center;font-size:var(--small-size);color:var(--text-bright);font-weight:600;padding:0.4rem 0;border-bottom:1px solid var(--border);background:var(--bg-deep)}
+.seq-line{position:relative;padding:clamp(0.3rem,0.6vw,0.5rem) clamp(0.8rem,1.4vw,1.2rem);font-size:var(--small-size);color:var(--text-dim);display:flex;align-items:center;gap:0.6rem}
+.seq-line.lr{justify-content:flex-start;border-right:1px solid var(--border-soft)}
+.seq-line.rl{justify-content:flex-end;text-align:right;grid-column:2;border-right:none}
+.seq-line .arrow{color:var(--green);font-weight:700}
+.seq-line.rl .arrow{color:var(--blue)}
+.seq-line .msg{color:var(--text-bright)}
+.seq-mode{grid-column:1/-1;padding:clamp(0.5rem,1vw,0.8rem);background:var(--green-glow);border-top:1px solid var(--green);border-bottom:1px solid var(--green);text-align:center;font-size:var(--small-size);color:var(--green);font-weight:600;letter-spacing:0.1em;text-transform:uppercase}
+
+/* ===========================================
+   ARCHITECTURE DIAGRAM
+   =========================================== */
+.arch-canvas{position:relative;flex:1;display:grid;gap:clamp(0.5rem,1vw,0.8rem);grid-template-rows:auto 1fr auto;padding:clamp(0.6rem,1.2vw,1rem);border:1px solid var(--border);background:var(--bg-elev);min-height:0}
+.arch-tier{display:flex;align-items:center;justify-content:center;gap:clamp(0.5rem,1vw,0.8rem)}
+.arch-box{padding:clamp(0.5rem,1vw,0.7rem) clamp(0.8rem,1.4vw,1.1rem);border:1px solid var(--border);background:var(--bg-deep);font-size:var(--small-size);color:var(--text-bright);font-weight:500;text-align:center;border-radius:2px;position:relative;display:flex;flex-direction:column;gap:0.15rem}
+.arch-box .ann{font-size:0.7em;color:var(--text-dim);font-weight:400;letter-spacing:0.05em}
+.arch-box.pg{border-color:var(--postgres);border-left:3px solid var(--postgres);background:linear-gradient(90deg,rgba(51,103,145,0.15) 0%,var(--bg-deep) 60%)}
+.arch-box.core{border-color:var(--green);border-left:3px solid var(--green);background:linear-gradient(90deg,var(--green-glow) 0%,var(--bg-deep) 60%)}
+.arch-box.sink{border-color:var(--border);background:var(--bg-deep)}
+.arch-box.sink.s1{border-color:var(--orange);border-top:2px solid var(--orange)}
+.arch-box.sink.s2{border-color:var(--blue);border-top:2px solid var(--blue)}
+.arch-box.sink.s3{border-color:var(--magenta);border-top:2px solid var(--magenta)}
+.arch-conn{display:flex;align-items:center;justify-content:center;gap:0.3rem;color:var(--green);font-size:var(--tiny-size);font-weight:600;letter-spacing:0.1em;text-transform:uppercase;padding:0.2rem 0}
+
+/* SVG flow lines */
+.svg-flow{width:100%;height:auto;display:block}
+.svg-flow path{fill:none;stroke:var(--green);stroke-width:1.5;stroke-dasharray:4 4;animation:dash-flow 1.5s linear infinite}
+.svg-flow path.blue{stroke:var(--blue)}
+.svg-flow text{fill:var(--text-dim);font-size:11px;font-family:'JetBrains Mono',monospace}
+
+/* ===========================================
+   DECORATOR PATTERN (nested boxes)
+   =========================================== */
+.decorator-stack{display:flex;flex-direction:column;align-items:center;gap:0}
+.deco{padding:clamp(0.6rem,1.2vw,0.9rem) clamp(1rem,2vw,1.6rem);border:1px solid var(--border);background:var(--bg-elev);font-size:var(--small-size);color:var(--text-bright);font-weight:500;border-radius:2px;display:flex;align-items:center;gap:0.8rem;position:relative;width:100%;max-width:480px}
+.deco .deco-label{flex:1}
+.deco .deco-role{font-size:var(--tiny-size);color:var(--text-dim);font-weight:400}
+.deco.outer{border-left:3px solid var(--magenta);background:linear-gradient(90deg,rgba(210,168,255,0.08) 0%,var(--bg-elev) 60%)}
+.deco.middle{border-left:3px solid var(--yellow);background:linear-gradient(90deg,rgba(240,198,116,0.08) 0%,var(--bg-elev) 60%)}
+.deco.inner{border-left:3px solid var(--green);background:linear-gradient(90deg,var(--green-glow) 0%,var(--bg-elev) 60%)}
+.deco-conn{width:2px;height:clamp(14px,2vh,22px);background:linear-gradient(180deg,var(--border),transparent);margin:0 auto}
+
+/* ===========================================
+   SINK GRID (cards)
+   =========================================== */
+.sink-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:clamp(0.6rem,1.2vw,1rem)}
+.sink-card{padding:clamp(0.8rem,1.5vw,1.1rem);border:1px solid var(--border);background:var(--bg-elev);border-radius:2px;position:relative;overflow:hidden;transition:transform 0.3s var(--ease-out),border-color 0.3s ease}
+.sink-card:hover{transform:translateY(-3px);border-color:var(--green)}
+.sink-card .icon{font-size:1.6em;margin-bottom:0.4rem;color:var(--green)}
+.sink-card .name{font-size:var(--h3-size);color:var(--text-bright);font-weight:600;margin-bottom:0.2rem;letter-spacing:-0.01em}
+.sink-card .desc{font-size:var(--tiny-size);color:var(--text-dim);line-height:1.5}
+.sink-card.s1 .icon{color:var(--orange)}
+.sink-card.s2 .icon{color:var(--blue)}
+.sink-card.s3 .icon{color:var(--magenta)}
+.sink-card.s4 .icon{color:var(--yellow)}
+.sink-card.s5 .icon{color:var(--red)}
+
+/* ===========================================
+   RETRY FLOW
+   =========================================== */
+.retry-flow{display:flex;align-items:center;gap:0.4rem;flex-wrap:nowrap;justify-content:center;padding:clamp(0.8rem,1.5vw,1.2rem);border:1px solid var(--border);background:var(--bg-elev);overflow-x:auto}
+.retry-step{flex-shrink:0;padding:clamp(0.4rem,0.8vw,0.6rem) clamp(0.6rem,1.2vw,1rem);border:1px solid var(--border);font-size:var(--tiny-size);color:var(--text);background:var(--bg-deep);text-align:center;border-radius:2px;min-width:clamp(70px,9vw,100px)}
+.retry-step .num{font-size:0.85em;color:var(--text-dim);margin-bottom:0.1rem}
+.retry-step.fail{border-color:var(--red);color:var(--red)}
+.retry-step.fail .num{color:var(--red);opacity:0.6}
+.retry-step.dlq{border-color:var(--yellow);color:var(--yellow);background:rgba(240,198,116,0.1)}
+.retry-step.dlq .num{color:var(--yellow);opacity:0.6}
+.retry-arrow{color:var(--text-dim);font-size:1.1em}
+
+/* ===========================================
+   BATCH TIMER VISUAL
+   =========================================== */
+.batch-visual{display:grid;grid-template-columns:1fr 1fr;gap:clamp(0.8rem,1.6vw,1.4rem)}
+.batch-trigger{padding:clamp(1rem,2vw,1.6rem);border:1px solid var(--border);background:var(--bg-elev);display:flex;flex-direction:column;gap:0.6rem;position:relative}
+.batch-trigger.size{border-left:3px solid var(--blue)}
+.batch-trigger.time{border-left:3px solid var(--orange)}
+.batch-trigger .label{font-size:var(--tiny-size);color:var(--text-dim);text-transform:uppercase;letter-spacing:0.15em}
+.batch-trigger h3{font-size:var(--h3-size);color:var(--text-bright);font-weight:600}
+.batch-trigger .desc{font-size:var(--body-size);color:var(--text);line-height:1.55}
+.batch-trigger .desc strong{color:var(--text-bright);font-weight:500}
+
+/* Buffer dots */
+.buffer-dots{display:flex;gap:0.3rem;margin-top:0.4rem;flex-wrap:wrap}
+.buffer-dot{width:clamp(12px,1.4vw,16px);height:clamp(12px,1.4vw,16px);border:1px solid var(--blue);background:transparent;border-radius:2px;transition:background 0.3s}
+.buffer-dot.filled{background:var(--blue)}
+
+/* Timer ring */
+.timer-ring{position:relative;width:clamp(48px,6vw,72px);height:clamp(48px,6vw,72px);margin-top:0.4rem}
+.timer-ring svg{transform:rotate(-90deg);width:100%;height:100%}
+.timer-ring circle{fill:none;stroke-width:3}
+.timer-ring .track{stroke:var(--border)}
+.timer-ring .fill{stroke:var(--orange);stroke-dasharray:200;stroke-dashoffset:0;animation:timer 4s linear infinite}
+@keyframes timer{from{stroke-dashoffset:0}to{stroke-dashoffset:200}}
+.timer-ring .timer-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:var(--tiny-size);color:var(--orange);font-weight:600}
+
+/* ===========================================
+   PROXY DIAGRAM
+   =========================================== */
+.proxy-grid{display:grid;grid-template-columns:auto 1fr auto;gap:clamp(0.5rem,1vw,0.8rem);align-items:center;padding:clamp(0.8rem,1.5vw,1.2rem);border:1px solid var(--border);background:var(--bg-elev);min-height:clamp(180px,24vh,260px)}
+.proxy-side{display:flex;flex-direction:column;gap:clamp(0.5rem,1vw,0.8rem)}
+.proxy-node{padding:clamp(0.5rem,1vw,0.8rem) clamp(0.7rem,1.4vw,1.2rem);border:1px solid var(--border);background:var(--bg-deep);text-align:center;border-radius:2px;font-size:var(--small-size);color:var(--text-bright);min-width:clamp(110px,14vw,160px)}
+.proxy-node .role{font-size:var(--tiny-size);color:var(--text-dim);margin-top:0.2rem;letter-spacing:0.1em;text-transform:uppercase}
+.proxy-node.primary{border-color:var(--red);border-top:3px solid var(--red)}
+.proxy-node.replica{border-color:var(--blue);border-top:3px solid var(--blue)}
+.proxy-center{display:flex;flex-direction:column;align-items:center;gap:0.4rem;padding:clamp(0.8rem,1.5vw,1.2rem);border:1px solid var(--green);background:var(--green-glow);border-radius:2px}
+.proxy-center .name{font-size:var(--h3-size);color:var(--green);font-weight:700}
+.proxy-center .port{font-size:var(--tiny-size);color:var(--text-dim);letter-spacing:0.1em}
+.proxy-center .actions{font-size:var(--tiny-size);color:var(--text);line-height:1.5;margin-top:0.3rem;text-align:center}
+
+/* SVG arrow between proxy parts */
+.proxy-arrow{display:flex;flex-direction:column;justify-content:center;gap:0.4rem;font-size:var(--tiny-size);color:var(--text-dim);text-align:center;padding:0 0.3rem}
+.proxy-arrow .a-line{color:var(--green)}
+.proxy-arrow .a-tag{padding:0.15rem 0.4rem;background:var(--bg-deep);border:1px solid var(--border);border-radius:2px;display:inline-block}
+.proxy-arrow.write .a-line{color:var(--red)}
+.proxy-arrow.read .a-line{color:var(--blue)}
+
+/* ===========================================
+   CLASSIFIER TABLE
+   =========================================== */
+.classifier-table{border:1px solid var(--border);background:var(--bg-elev);overflow:hidden}
+.classifier-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border-bottom:1px solid var(--border-soft);font-size:var(--small-size)}
+.classifier-row:last-child{border-bottom:none}
+.classifier-row.header{background:var(--bg-deep);font-weight:600;color:var(--text-dim);font-size:var(--tiny-size);letter-spacing:0.15em;text-transform:uppercase}
+.classifier-row > div{padding:clamp(0.4rem,0.8vw,0.6rem) clamp(0.7rem,1.4vw,1.1rem);border-right:1px solid var(--border-soft);display:flex;align-items:center}
+.classifier-row > div:last-child{border-right:none}
+.classifier-row .keyword{color:var(--text-bright);font-weight:500}
+.classifier-row .type{font-size:var(--tiny-size);font-weight:600;letter-spacing:0.1em}
+.classifier-row .type.read{color:var(--blue)}
+.classifier-row .type.write{color:var(--red)}
+.classifier-row .type.txn{color:var(--yellow)}
+.classifier-row .route{color:var(--text);font-size:0.95em}
+
+/* ===========================================
+   METRICS LIVE COUNTERS
+   =========================================== */
+.metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:clamp(0.6rem,1.2vw,1rem)}
+.metric-card{padding:clamp(0.8rem,1.5vw,1.2rem);border:1px solid var(--border);background:var(--bg-elev);border-radius:2px;position:relative}
+.metric-card.green{border-left:3px solid var(--green)}
+.metric-card.blue{border-left:3px solid var(--blue)}
+.metric-card.orange{border-left:3px solid var(--orange)}
+.metric-card.magenta{border-left:3px solid var(--magenta)}
+.metric-card .metric-name{font-size:var(--tiny-size);color:var(--text-dim);font-family:'JetBrains Mono',monospace;letter-spacing:0.05em;margin-bottom:0.4rem;line-height:1.3}
+.metric-card .metric-value{font-size:clamp(1.4rem,3.2vw,2.4rem);color:var(--text-bright);font-weight:700;letter-spacing:-0.02em;line-height:1;font-variant-numeric:tabular-nums}
+.metric-card .metric-unit{font-size:0.5em;color:var(--text-dim);font-weight:400;margin-left:0.3em}
+.metric-card .metric-sparkline{margin-top:0.6rem;height:clamp(20px,2.5vh,30px)}
+.metric-card .metric-sparkline svg{width:100%;height:100%;display:block}
+
+/* ===========================================
+   QUOTE / REFLECTION SLIDE
+   =========================================== */
+.reflection{display:flex;flex-direction:column;justify-content:center;gap:clamp(1rem,2vw,1.6rem);max-width:90ch;margin:0 auto}
+.reflection-quote{font-size:clamp(1.2rem,2.8vw,2rem);line-height:1.4;color:var(--text-bright);font-weight:500;letter-spacing:-0.01em}
+.reflection-quote .em{color:var(--green);font-style:italic}
+.reflection-attr{font-size:var(--body-size);color:var(--text-dim);display:flex;align-items:center;gap:0.6rem}
+.reflection-attr::before{content:"";width:24px;height:1px;background:var(--text-dim)}
+
+/* ===========================================
+   CLOSING / CTA
+   =========================================== */
+.cta-block{padding:clamp(1.2rem,2.4vw,2rem);border:1px solid var(--green);background:linear-gradient(135deg,var(--green-glow) 0%,transparent 80%);text-align:center;border-radius:2px}
+.cta-block h2{font-size:clamp(1.8rem,4.5vw,3.4rem);color:var(--text-bright);font-weight:700;line-height:1.05;letter-spacing:-0.02em;margin-bottom:0.6rem}
+.cta-block h2 .accent{color:var(--green);text-shadow:0 0 24px var(--green-glow)}
+.cta-block .url{font-size:clamp(0.9rem,1.6vw,1.3rem);color:var(--green);font-weight:600;padding:clamp(0.5rem,1vw,0.8rem) clamp(1rem,2vw,1.6rem);border:1px solid var(--green);display:inline-flex;align-items:center;gap:0.6rem;border-radius:2px;background:var(--bg-deep);margin-top:0.8rem;transition:all 0.3s ease;text-decoration:none}
+.cta-block .url:hover{background:var(--green-glow);transform:translateY(-2px)}
+.cta-block .url::before{content:"$";color:var(--text-dim)}
+.cta-block .tagline{font-size:var(--body-size);color:var(--text-dim);margin-top:0.6rem;line-height:1.55;max-width:60ch;margin-left:auto;margin-right:auto}
+
+/* ===========================================
+   PROGRESS BAR
+   =========================================== */
+.progress-bar{position:fixed;top:0;left:0;width:0%;height:2px;background:var(--green);z-index:100;transition:width 0.3s ease;box-shadow:0 0 8px var(--green-glow)}
+
+/* ===========================================
+   NAV DOTS
+   =========================================== */
+.nav-dots{position:fixed;right:clamp(0.6rem,1.5vw,1.2rem);top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:0.45rem;z-index:50}
+.nav-dot{width:6px;height:6px;border-radius:50%;background:var(--border);cursor:pointer;transition:all 0.3s ease;border:none;padding:0}
+.nav-dot.active{background:var(--green);box-shadow:0 0 6px var(--green-glow);width:6px;height:14px;border-radius:3px}
+.nav-dot:hover{background:var(--text-dim)}
+
+/* ===========================================
+   EDIT MODE (inline editing)
+   =========================================== */
+.edit-hotzone{position:fixed;top:0;left:0;width:80px;height:80px;z-index:10000;cursor:pointer}
+.edit-toggle{position:fixed;top:14px;left:14px;width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:var(--bg-elev);color:var(--text-bright);cursor:pointer;opacity:0;pointer-events:none;transition:opacity 0.3s ease;z-index:10001;font-size:14px;display:flex;align-items:center;justify-content:center}
+.edit-toggle.show,.edit-toggle.active{opacity:1;pointer-events:auto}
+.edit-toggle.active{background:var(--green);color:var(--bg)}
+.edit-banner{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);padding:0.6rem 1rem;background:var(--bg-elev);border:1px solid var(--green);color:var(--text-bright);font-size:var(--tiny-size);font-family:'JetBrains Mono',monospace;letter-spacing:0.1em;z-index:10001;opacity:0;pointer-events:none;transition:opacity 0.3s ease;border-radius:2px}
+.edit-banner.active{opacity:1;pointer-events:auto}
+.edit-banner kbd{padding:0.1rem 0.4rem;background:var(--bg-deep);border:1px solid var(--border);border-radius:2px;color:var(--green);margin:0 0.2rem;font-family:inherit}
+body.edit-active [contenteditable="true"]{outline:1px dashed var(--green);outline-offset:3px;cursor:text;border-radius:2px;transition:outline-color 0.2s ease}
+body.edit-active [contenteditable="true"]:hover{outline-color:var(--green);outline-style:solid}
+body.edit-active [contenteditable="true"]:focus{outline-color:var(--green);outline-style:solid;background:var(--green-glow)}
+
+/* ===========================================
+   INTERACTIVE ARCHITECTURE (slide 6)
+   =========================================== */
+.iarch{position:relative;flex:1;display:grid;grid-template-rows:auto 1fr auto;gap:clamp(0.4rem,0.8vw,0.7rem);border:1px solid var(--border);background:var(--bg-elev);padding:clamp(0.6rem,1.2vw,1rem);min-height:0;overflow:hidden}
+.iarch-controls{display:flex;align-items:center;gap:0.6rem;padding:0.4rem 0.6rem;border-bottom:1px solid var(--border-soft);font-size:var(--tiny-size);color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;flex-shrink:0;flex-wrap:wrap}
+.iarch-controls .ctrl-btn{padding:0.35rem 0.8rem;border:1px solid var(--border);background:var(--bg-deep);color:var(--text-bright);cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:var(--tiny-size);letter-spacing:0.1em;text-transform:uppercase;border-radius:2px;transition:all 0.2s ease;font-weight:500}
+.iarch-controls .ctrl-btn:hover{border-color:var(--green);color:var(--green)}
+.iarch-controls .ctrl-btn.active{background:var(--green-glow);border-color:var(--green);color:var(--green)}
+.iarch-controls .ctrl-spacer{flex:1}
+.iarch-controls .ctrl-stat{padding:0.35rem 0.6rem;border:1px solid var(--border-soft);background:var(--bg-deep);font-family:'JetBrains Mono',monospace;font-size:var(--tiny-size);color:var(--text-dim);border-radius:2px}
+.iarch-controls .ctrl-stat strong{color:var(--green);font-weight:600;font-variant-numeric:tabular-nums}
+
+.iarch-canvas{position:relative;flex:1;min-height:clamp(220px,32vh,360px);display:flex;flex-direction:column;justify-content:space-between;align-items:stretch;gap:clamp(0.4rem,0.8vw,0.7rem);padding:clamp(0.5rem,1vw,0.8rem) 0}
+.iarch-svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
+.iarch-svg path{fill:none;stroke:var(--border);stroke-width:1.5;transition:stroke 0.3s ease,stroke-width 0.3s ease}
+.iarch-svg path.active{stroke:var(--green);stroke-width:2;stroke-dasharray:4 4;animation:dash-flow 1s linear infinite}
+.iarch-svg path.dim{stroke:var(--border-soft);stroke-width:1}
+
+.iarch-tier{position:relative;display:flex;justify-content:center;align-items:center;gap:clamp(0.4rem,1vw,0.8rem);z-index:2;flex-wrap:wrap}
+.iarch-node{position:relative;padding:clamp(0.5rem,1vw,0.7rem) clamp(0.7rem,1.4vw,1.1rem);border:1px solid var(--border);background:var(--bg-deep);font-size:var(--small-size);color:var(--text-bright);text-align:center;border-radius:3px;cursor:pointer;transition:all 0.25s var(--ease-out);min-width:clamp(90px,12vw,140px);display:flex;flex-direction:column;gap:0.15rem;user-select:none}
+.iarch-node:hover{transform:translateY(-2px);border-color:var(--green);box-shadow:0 0 16px var(--green-glow)}
+.iarch-node.focused{border-color:var(--green);background:var(--green-glow);box-shadow:0 0 0 1px var(--green),0 0 20px var(--green-glow);transform:translateY(-2px)}
+.iarch-node.dimmed{opacity:0.35;filter:saturate(0.4)}
+.iarch-node .nlabel{font-weight:600;letter-spacing:-0.01em}
+.iarch-node .nann{font-size:0.7em;color:var(--text-dim);font-weight:400;letter-spacing:0.04em}
+.iarch-node.t-pg{border-left:3px solid var(--postgres)}
+.iarch-node.t-pg.focused{background:rgba(51,103,145,0.15)}
+.iarch-node.t-core{border-left:3px solid var(--green)}
+.iarch-node.t-sink{border-left:3px solid var(--orange)}
+.iarch-node.t-sink.sk-webhook{border-left-color:var(--blue)}
+.iarch-node.t-sink.sk-kafka{border-left-color:var(--magenta)}
+.iarch-node.t-sink.sk-dlq{border-left-color:var(--yellow)}
+
+/* particles flowing along paths */
+.iarch-particle{position:absolute;width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);pointer-events:none;z-index:3;will-change:transform,opacity}
+.iarch-particle.p-pg{background:var(--postgres);box-shadow:0 0 10px var(--postgres)}
+.iarch-particle.p-event{background:var(--green);box-shadow:0 0 10px var(--green)}
+
+/* Detail panel */
+.iarch-detail{padding:clamp(0.6rem,1.2vw,0.9rem) clamp(0.8rem,1.6vw,1.2rem);border:1px solid var(--border-soft);background:var(--bg-deep);font-size:var(--small-size);color:var(--text);line-height:1.55;min-height:clamp(58px,8vh,80px);display:flex;align-items:center;gap:0.8rem;flex-shrink:0}
+.iarch-detail .dtitle{font-weight:600;color:var(--text-bright);font-size:var(--body-size);letter-spacing:-0.01em;flex-shrink:0;min-width:clamp(80px,12vw,140px)}
+.iarch-detail .ddesc{flex:1;color:var(--text);font-size:var(--small-size)}
+.iarch-detail .ddesc code{color:var(--yellow);font-size:0.95em;padding:0.05em 0.3em;background:var(--bg-elev);border-radius:2px}
+.iarch-detail .dhint{font-size:var(--tiny-size);color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase}
+
+/* ===========================================
+   SINK CHAIN BUILDER (slide 7)
+   =========================================== */
+.chain-builder{display:grid;grid-template-columns:1fr 1.1fr;gap:clamp(0.8rem,1.6vw,1.4rem);align-items:stretch}
+.chain-controls{display:flex;flex-direction:column;gap:clamp(0.5rem,1vw,0.8rem);padding:clamp(0.8rem,1.5vw,1.2rem);border:1px solid var(--border);background:var(--bg-elev)}
+.chain-controls h4{font-size:var(--tiny-size);color:var(--text-dim);letter-spacing:0.15em;text-transform:uppercase;font-weight:500;margin-bottom:0.2rem}
+.toggle-row{display:flex;align-items:center;gap:0.7rem;padding:clamp(0.5rem,1vw,0.7rem) clamp(0.6rem,1.2vw,1rem);border:1px solid var(--border-soft);background:var(--bg-deep);cursor:pointer;transition:all 0.2s ease;border-radius:2px;user-select:none}
+.toggle-row:hover{border-color:var(--green)}
+.toggle-row.on{border-color:var(--green);background:var(--green-glow)}
+.toggle-switch{width:30px;height:16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elev);position:relative;flex-shrink:0;transition:all 0.25s ease}
+.toggle-switch::after{content:"";position:absolute;top:1px;left:1px;width:12px;height:12px;border-radius:50%;background:var(--text-dim);transition:all 0.25s ease}
+.toggle-row.on .toggle-switch{border-color:var(--green);background:var(--green-glow)}
+.toggle-row.on .toggle-switch::after{transform:translateX(14px);background:var(--green)}
+.toggle-info{flex:1}
+.toggle-info .tname{font-size:var(--small-size);color:var(--text-bright);font-weight:600}
+.toggle-info .trole{font-size:var(--tiny-size);color:var(--text-dim);margin-top:0.1rem}
+.dest-select{display:flex;gap:0.4rem;flex-wrap:wrap;margin-top:0.3rem}
+.dest-btn{flex:1;padding:0.35rem 0.6rem;border:1px solid var(--border);background:var(--bg-deep);color:var(--text);cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:var(--tiny-size);border-radius:2px;transition:all 0.2s ease;text-align:center;min-width:0}
+.dest-btn:hover{border-color:var(--green);color:var(--green)}
+.dest-btn.active{background:var(--green-glow);border-color:var(--green);color:var(--green);font-weight:600}
+.fire-btn{margin-top:0.4rem;padding:clamp(0.5rem,1vw,0.7rem);border:1px solid var(--green);background:var(--green-glow);color:var(--green);cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:var(--small-size);letter-spacing:0.15em;text-transform:uppercase;border-radius:2px;font-weight:600;transition:all 0.2s ease}
+.fire-btn:hover{background:var(--green);color:var(--bg)}
+.fire-btn:disabled{opacity:0.4;cursor:not-allowed}
+
+.chain-vis{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:clamp(0.8rem,1.5vw,1.2rem);border:1px solid var(--border);background:var(--bg-elev);gap:0;min-height:clamp(220px,32vh,340px)}
+.chain-vis .deco{transition:all 0.4s var(--ease-out);max-width:340px}
+.chain-vis .deco.removed{opacity:0;transform:translateY(-8px) scale(0.9);height:0;padding:0;border:0;margin:0;overflow:hidden;pointer-events:none}
+.chain-vis .deco.pulse{animation:deco-pulse 0.6s ease}
+@keyframes deco-pulse{0%{box-shadow:0 0 0 0 var(--green-glow)}50%{box-shadow:0 0 0 8px transparent;transform:translateX(0) scale(1.03)}100%{box-shadow:none}}
+.chain-vis .deco-conn{transition:all 0.4s ease}
+.chain-vis .deco-conn.removed{height:0;opacity:0}
+.chain-particle{position:absolute;width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 16px var(--green),0 0 4px var(--green);left:50%;top:0;transform:translateX(-50%);z-index:5;pointer-events:none;opacity:0}
+.chain-status{position:absolute;bottom:0.6rem;left:0.8rem;right:0.8rem;font-size:var(--tiny-size);color:var(--text-dim);letter-spacing:0.1em;text-align:center;font-family:'JetBrains Mono',monospace;min-height:1.2em;transition:color 0.3s ease}
+.chain-status.success{color:var(--green)}
+.chain-status.error{color:var(--red)}
+
+/* ===========================================
+   LIVE SQL ROUTER (slide 13)
+   =========================================== */
+.router-shell{display:flex;flex-direction:column;gap:clamp(0.5rem,1vw,0.8rem)}
+.router-input-row{display:flex;align-items:center;gap:0.5rem;padding:clamp(0.6rem,1.2vw,0.9rem) clamp(0.8rem,1.5vw,1.1rem);border:1px solid var(--border);background:var(--bg-elev);border-radius:2px;font-family:'JetBrains Mono',monospace}
+.router-input-row .rprompt{color:var(--green);font-size:var(--body-size);font-weight:600;flex-shrink:0}
+.router-input{flex:1;background:transparent;border:0;outline:0;color:var(--text-bright);font-family:'JetBrains Mono',monospace;font-size:var(--body-size);padding:0.2rem 0;min-width:0}
+.router-input::placeholder{color:var(--text-dim);opacity:0.6}
+.router-samples{display:flex;gap:0.4rem;flex-wrap:wrap}
+.sample-btn{padding:0.35rem 0.7rem;border:1px solid var(--border);background:var(--bg-deep);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:var(--tiny-size);cursor:pointer;border-radius:2px;transition:all 0.2s ease;letter-spacing:0.02em}
+.sample-btn:hover{border-color:var(--green);color:var(--green)}
+
+.router-stage{display:grid;grid-template-columns:1fr auto 1fr;gap:clamp(0.5rem,1vw,0.8rem);align-items:center;padding:clamp(0.8rem,1.5vw,1.1rem);border:1px solid var(--border);background:var(--bg-elev);min-height:clamp(90px,12vh,120px)}
+.router-stage .end-node{padding:clamp(0.5rem,1vw,0.7rem) clamp(0.7rem,1.4vw,1.1rem);border:1px solid var(--border);background:var(--bg-deep);text-align:center;border-radius:2px;transition:all 0.3s ease}
+.router-stage .end-node.proxy{border-color:var(--green);background:var(--green-glow)}
+.router-stage .end-node .ename{font-size:var(--small-size);color:var(--text-bright);font-weight:600}
+.router-stage .end-node .erole{font-size:var(--tiny-size);color:var(--text-dim);margin-top:0.15rem;letter-spacing:0.08em;text-transform:uppercase}
+.router-stage .end-node.primary.target{border-color:var(--red);background:rgba(248,81,73,0.12);box-shadow:0 0 16px rgba(248,81,73,0.25)}
+.router-stage .end-node.replica.target{border-color:var(--blue);background:rgba(88,166,255,0.12);box-shadow:0 0 16px rgba(88,166,255,0.25)}
+.router-stage .targets{display:flex;flex-direction:column;gap:clamp(0.4rem,0.8vw,0.6rem)}
+.router-track{position:relative;height:36px;display:flex;align-items:center;justify-content:center}
+.router-track .track-line{position:absolute;top:50%;left:0;right:0;height:1px;background:var(--border)}
+.router-track .track-line.up{transform-origin:center;transform:rotate(-12deg) translateY(-1px)}
+.router-track .track-line.down{transform-origin:center;transform:rotate(12deg) translateY(1px)}
+.router-track .track-pkt{position:absolute;top:50%;left:0;width:12px;height:12px;border-radius:50%;background:var(--text-dim);transform:translate(-50%,-50%);transition:left 0.7s var(--ease-out),background 0.3s ease,box-shadow 0.3s ease}
+.router-track .track-pkt.flying{box-shadow:0 0 14px currentColor}
+.router-track .track-pkt.read{background:var(--blue);color:var(--blue)}
+.router-track .track-pkt.write{background:var(--red);color:var(--red)}
+.router-track .track-pkt.txn{background:var(--yellow);color:var(--yellow)}
+
+.router-verdict{display:grid;grid-template-columns:1fr 1fr 1fr;gap:clamp(0.5rem,1vw,0.8rem);font-size:var(--small-size)}
+.verdict-cell{padding:clamp(0.5rem,1vw,0.7rem) clamp(0.7rem,1.4vw,1rem);border:1px solid var(--border-soft);background:var(--bg-deep);border-radius:2px}
+.verdict-cell .vlabel{font-size:var(--tiny-size);color:var(--text-dim);letter-spacing:0.15em;text-transform:uppercase;margin-bottom:0.25rem}
+.verdict-cell .vvalue{color:var(--text-bright);font-weight:600;font-size:0.95em}
+.verdict-cell.read .vvalue{color:var(--blue)}
+.verdict-cell.write .vvalue{color:var(--red)}
+.verdict-cell.txn .vvalue{color:var(--yellow)}
+
+.classifier-row.match-flash{animation:row-flash 1.2s ease}
+@keyframes row-flash{0%{background:transparent}30%{background:var(--green-glow)}100%{background:transparent}}
+
+/* ===========================================
+   RESPONSIVE
+   =========================================== */
+@media (max-height: 700px){
+  :root{--content-gap:clamp(0.4rem,1vw,0.8rem)}
+  .slide{padding:clamp(0.8rem,2vw,1.6rem) clamp(1rem,2.5vw,2rem)}
+}
+@media (max-height: 600px){
+  .nav-dots{display:none}
+  .status-bar .repo{display:none}
+}
+@media (max-width: 700px){
+  .two-col,.three-col,.transform-grid,.proxy-grid{grid-template-columns:1fr}
+  .seq-line.rl{grid-column:1}
+  .nav-dots{display:none}
+}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:0.01ms!important;transition-duration:0.2s!important}
+  html{scroll-behavior:auto}
+  .wal-record,.timer-ring .fill{animation:none}
+}
+</style>
+</head>
+<body>
+
+<!-- Progress bar -->
+<div class="progress-bar" id="progressBar"></div>
+
+<!-- Navigation dots (generated by JS) -->
+<nav class="nav-dots" id="navDots" aria-label="Slide navigation"></nav>
+
+<!-- Inline edit controls -->
+<div class="edit-hotzone" id="editHotzone" aria-hidden="true"></div>
+<button class="edit-toggle" id="editToggle" title="Edit mode (press E)" aria-label="Toggle edit mode">✏</button>
+<div class="edit-banner" id="editBanner">
+  EDIT MODE · click any text to edit · <kbd>Ctrl+S</kbd> export · <kbd>E</kbd> exit
+</div>
+
+<!-- ===========================================
+     SLIDE 1 — TITLE
+     =========================================== -->
+<section class="slide title-slide" data-title="waltap">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">~/projects/waltap — go run ./cmd/pgcdc</span>
+    <span class="slide-num">01 / 16</span>
+  </div>
+  <div class="content">
+    <div style="display:flex;flex-direction:column;gap:clamp(0.5rem,1vw,0.8rem);font-size:var(--body-size);line-height:1.65">
+      <div class="reveal"><span class="prompt">$</span> <span class="cmd">go run</span> <span class="flag">./cmd/pgcdc</span> <span class="flag">--db</span> <span class="str">"postgres://lab:lab@localhost:5433/wallab"</span> <span class="flag">--sink</span> <span class="str">stdout</span></div>
+      <div class="reveal dim">connected to postgres (replication mode)</div>
+      <div class="reveal dim">publication "pgcdc_pub" exists · slot "pgcdc_slot" at LSN <span class="val">0/19CFB20</span></div>
+      <div class="reveal dim">streaming started — waiting for changes...</div>
+    </div>
+    <div class="banner-hero reveal">
+      <div class="title">walt<span class="accent">ap</span><span class="cursor-blink"></span></div>
+      <div class="sub">A <span class="hl">Change Data Capture</span> pipeline for PostgreSQL — taps the Write-Ahead Log via logical replication, decodes row-level events, and delivers them to <span class="hl">pluggable sinks</span>. Ships with a wire-protocol proxy for read/write split.</div>
+    </div>
+    <div class="kv-grid reveal">
+      <div class="kv accent-g"><div class="k">LANG</div><div class="v">Go 1.25</div></div>
+      <div class="kv accent-b"><div class="k">PROTOCOL</div><div class="v">pgoutput v1</div></div>
+      <div class="kv accent-o"><div class="k">SINKS</div><div class="v">stdout · webhook · kafka</div></div>
+      <div class="kv accent-m"><div class="k">PROXY</div><div class="v">Postgres wire protocol</div></div>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">streaming · LSN 0/19CFB20</span>
+    <span class="repo"><strong>github.com/12345debdut/waltap</strong></span>
+    <span>↓ scroll · → space</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 2 — THE HOOK
+     =========================================== -->
+<section class="slide" data-title="The Hook">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">why_wal_matters.md</span>
+    <span class="slide-num">02 / 16</span>
+  </div>
+  <div class="content">
+    <div class="reveal" style="font-size:var(--tiny-size);color:var(--text-dim);letter-spacing:0.2em;text-transform:uppercase">// where this story begins</div>
+    <h1 class="hook-quote reveal">
+      Postgres doesn't <span class="strike">write your data to disk</span><br>
+      when you <span class="replace">commit</span>.
+    </h1>
+    <div class="reveal" style="font-size:var(--body-size);color:var(--text);line-height:1.7;max-width:80ch">
+      It writes a <span class="bright">200-byte</span> log entry to the <span class="accent">Write-Ahead Log</span> first — and that's enough.<br>
+      The actual data file might not be touched for minutes.
+    </div>
+    <div class="flow-diagram reveal" style="margin-top:0.5rem">
+      <div class="flow-card">
+        <div class="label">on commit</div>
+        <div class="val">fsync(WAL)</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-card accent">
+        <div class="label">durable</div>
+        <div class="val">200 bytes</div>
+      </div>
+    </div>
+    <div class="reveal" style="font-size:var(--small-size);color:var(--text-dim);line-height:1.6">
+      <span class="bright">The write-ahead contract:</span> if the WAL record is on disk, the change is durable. The data page can catch up later.<br>
+      <em>This is the foundation everything else in this deck is built on.</em>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">page 02</span>
+    <span class="repo">durability · WAL fundamentals</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 3 — WAL VISUALIZED
+     =========================================== -->
+<section class="slide" data-title="What is WAL">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">pg_wal/000000010000000000000001</span>
+    <span class="slide-num">03 / 16</span>
+  </div>
+  <div class="content">
+    <div class="section-banner reveal">
+      <div class="eyebrow">Chapter 1</div>
+      <h2>WAL is an <span class="hl">append-only log</span> of every change</h2>
+      <div class="sub">16MB segment files in <code style="color:var(--yellow)">pg_wal/</code>. Each record describes one byte-level change to a data page. Postgres flushes WAL on commit. Replication reads from it.</div>
+    </div>
+    <div class="reveal" style="font-size:var(--small-size);color:var(--text-dim);letter-spacing:0.1em">
+      LIVE WAL STREAM:
+    </div>
+    <div class="wal-track reveal">
+      <div class="label">PG_WAL</div>
+      <div class="wal-record">XLOG · INSERT · users</div>
+      <div class="wal-record">XLOG · UPDATE · orders</div>
+      <div class="wal-record">XLOG · COMMIT · xid 7892</div>
+      <div class="wal-record">XLOG · INSERT · events</div>
+    </div>
+    <div class="two-col reveal">
+      <div class="codeblock">
+        <div style="font-size:var(--tiny-size);color:var(--text-dim);letter-spacing:0.1em;margin-bottom:0.4rem">// WAL RECORD STRUCTURE</div>
+        <div class="ln" data-ln="1"><span class="kw">struct</span> <span class="bright">XLogRecord</span> {</div>
+        <div class="ln" data-ln="2">  <span class="key">xl_tot_len</span>: <span class="val">uint32</span>  <span class="comment">// total length</span></div>
+        <div class="ln" data-ln="3">  <span class="key">xl_xid</span>:     <span class="val">uint32</span>  <span class="comment">// transaction id</span></div>
+        <div class="ln" data-ln="4">  <span class="key">xl_prev</span>:    <span class="val">uint64</span>  <span class="comment">// prev LSN</span></div>
+        <div class="ln" data-ln="5">  <span class="key">xl_crc</span>:     <span class="val">uint32</span>  <span class="comment">// checksum</span></div>
+        <div class="ln" data-ln="6">  <span class="key">data</span>:       <span class="val">bytes</span>   <span class="comment">// payload</span></div>
+        <div class="ln" data-ln="7">}</div>
+      </div>
+      <div class="kv-grid" style="grid-template-columns:1fr;gap:0.5rem;align-content:start">
+        <div class="kv accent-g"><div class="k">DURABILITY</div><div class="v">fsync on commit</div></div>
+        <div class="kv accent-b"><div class="k">RECOVERY</div><div class="v">replay from last checkpoint</div></div>
+        <div class="kv accent-o"><div class="k">REPLICATION</div><div class="v">stream to standbys</div></div>
+        <div class="kv accent-m"><div class="k">CDC</div><div class="v">decode to events ← us</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">streaming · WAL segment 000001</span>
+    <span class="repo">internals · log structure</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 4 — PHYSICAL → LOGICAL
+     =========================================== -->
+<section class="slide" data-title="Logical Replication">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">pgoutput.transform()</span>
+    <span class="slide-num">04 / 16</span>
+  </div>
+  <div class="content">
+    <div class="section-banner reveal">
+      <div class="eyebrow">Chapter 2</div>
+      <h2>From <span class="hl">bytes</span> to <span class="hl">events</span></h2>
+      <div class="sub">Physical WAL records page-byte changes. <span class="bright">pgoutput</span> — Postgres's logical decoding plugin — translates them into structured row-level events you can actually act on.</div>
+    </div>
+    <div class="transform-grid reveal">
+      <div class="transform-panel physical">
+        <div class="panel-label">PHYSICAL WAL · page bytes</div>
+        <pre style="font-family:'JetBrains Mono',monospace;font-size:var(--small-size)">Heap INSERT: off 3
+blkref #0: rel 1663/16384/16385
+blk 0
+xmin 7892</pre>
+        <div style="font-size:var(--tiny-size);color:var(--text-dim);margin-top:auto">// requires page-layout knowledge<br>// requires OID-to-name lookup<br>// requires Postgres source code</div>
+      </div>
+      <div class="transform-arrow">
+        <div class="arrow-label">pgoutput plugin</div>
+        <div class="arrow-icon">→</div>
+      </div>
+      <div class="transform-panel logical">
+        <div class="panel-label">LOGICAL EVENT · structured JSON</div>
+<pre style="font-family:'JetBrains Mono',monospace;font-size:var(--small-size)">{
+  <span class="key">"action"</span>: <span class="str">"INSERT"</span>,
+  <span class="key">"schema"</span>: <span class="str">"public"</span>,
+  <span class="key">"table"</span>:  <span class="str">"users"</span>,
+  <span class="key">"new"</span>: {
+    <span class="key">"id"</span>:    <span class="val">1</span>,
+    <span class="key">"name"</span>:  <span class="str">"alice"</span>
+  },
+  <span class="key">"lsn"</span>:    <span class="str">"0/19CFB20"</span>,
+  <span class="key">"xid"</span>:    <span class="val">7892</span>
+}</pre>
+      </div>
+    </div>
+    <div class="reveal" style="font-size:var(--body-size);color:var(--text);line-height:1.6;text-align:center;max-width:80ch;margin:0 auto">
+      A <span class="accent">replication slot</span> is essentially a cursor into this infinite, append-only event stream.<br>
+      <span class="dim">It remembers where you left off — even across restarts.</span>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">decoding · 1247 events / sec</span>
+    <span class="repo">pgoutput · proto_version 1</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 5 — REPLICATION HANDSHAKE
+     =========================================== -->
+<section class="slide" data-title="Replication Protocol">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">protocol.streaming_replication</span>
+    <span class="slide-num">05 / 16</span>
+  </div>
+  <div class="content">
+    <div class="section-banner reveal">
+      <div class="eyebrow">Chapter 3 · the handshake</div>
+      <h2>How a Go client speaks the <span class="hl">streaming replication</span> protocol</h2>
+      <div class="sub">Append <code style="color:var(--yellow)">?replication=database</code> to the connection string. Then dance.</div>
+    </div>
+    <div class="seq-diagram reveal">
+      <div class="seq-actor">waltap (Go client)</div>
+      <div class="seq-actor">PostgreSQL</div>
+
+      <div class="seq-line lr"><span class="arrow">→</span><span><span class="kw">IdentifySystem</span></span></div>
+      <div class="seq-line rl"><span><span class="msg">SystemID</span> · Timeline · <span class="msg">XLogPos</span></span><span class="arrow">←</span></div>
+
+      <div class="seq-line lr"><span class="arrow">→</span><span><span class="kw">CREATE_REPLICATION_SLOT</span> <span class="str">pgcdc_slot</span> <span class="dim">LOGICAL pgoutput</span></span></div>
+      <div class="seq-line rl"><span><span class="msg">ConsistentPoint</span> · <span class="val">0/19CFB20</span></span><span class="arrow">←</span></div>
+
+      <div class="seq-line lr"><span class="arrow">→</span><span><span class="kw">START_REPLICATION</span> SLOT <span class="str">pgcdc_slot</span> LOGICAL <span class="val">0/19CFB20</span></span></div>
+
+      <div class="seq-mode">⇄ copy-both mode · bidirectional streaming ⇄</div>
+
+      <div class="seq-line rl"><span><span class="kw">XLogData</span> · <span class="msg">InsertMessage(users)</span></span><span class="arrow">←</span></div>
+      <div class="seq-line lr"><span class="arrow">→</span><span><span class="kw">StandbyStatusUpdate</span> · ack LSN <span class="val">0/19CFC50</span></span></div>
+      <div class="seq-line rl"><span><span class="kw">PrimaryKeepalive</span> · <span class="dim">reply requested</span></span><span class="arrow">←</span></div>
+    </div>
+    <div class="reveal" style="font-size:var(--small-size);color:var(--text-dim);text-align:center;line-height:1.6">
+      <span class="bright">The ack matters</span>: tell Postgres you've processed up to LSN X, it recycles older WAL. <span class="bright">Forget to ack</span> and WAL grows unbounded.
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">copy-both mode · 0/19CFB20</span>
+    <span class="repo">pglogrepl · jackc/pgx</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 6 — SYSTEM ARCHITECTURE
+     =========================================== -->
+<section class="slide" data-title="Architecture">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">docs/architecture.md</span>
+    <span class="slide-num">06 / 16</span>
+  </div>
+  <div class="content">
+    <div class="section-banner reveal">
+      <div class="eyebrow">Chapter 4 · system overview</div>
+      <h2>The full <span class="hl">waltap</span> pipeline</h2>
+      <div class="sub">Stream → Filter → Sink chain. Plus a separate read/write split proxy. Both binaries share library code.</div>
+    </div>
+    <div class="iarch reveal-scale" id="iarch" style="flex:1">
+      <div class="iarch-controls">
+        <button class="ctrl-btn" id="archPlay" data-active="false">▶ stream events</button>
+        <button class="ctrl-btn" id="archReset">↻ reset</button>
+        <span class="ctrl-spacer"></span>
+        <span class="ctrl-stat">events flowed · <strong id="archCount">0</strong></span>
+        <span class="ctrl-stat">hover · click any node</span>
+      </div>
+      <div class="iarch-canvas" id="archCanvas">
+        <svg class="iarch-svg" id="archSvg" preserveAspectRatio="none"></svg>
+
+        <div class="iarch-tier">
+          <button class="iarch-node t-pg" data-node="pg"
+            data-info="PostgreSQL: the source of truth. wal_level=logical writes extra info into WAL — table OIDs, column values — that pgoutput decodes into row-level events. Configured via docker-compose.">
+            <span class="nlabel">PostgreSQL</span>
+            <span class="nann">wal_level=logical</span>
+          </button>
+        </div>
+
+        <div class="iarch-tier">
+          <button class="iarch-node t-core" data-node="snapshot"
+            data-info="Snapshot: loads existing rows BEFORE streaming starts. REPEATABLE READ isolation gives a consistent point-in-time view. Records the LSN — the stream picks up exactly there. Optional (--snapshot flag).">
+            <span class="nlabel">Snapshot</span>
+            <span class="nann">REPEATABLE READ</span>
+          </button>
+          <button class="iarch-node t-core" data-node="stream"
+            data-info="Stream: opens a replication connection, runs IdentifySystem, ensures publication and slot exist, then loops over pgoutput messages (Begin/Relation/Insert/Update/Delete/Commit). Acks LSN progress every 10s.">
+            <span class="nlabel">Stream</span>
+            <span class="nann">message loop</span>
+          </button>
+          <button class="iarch-node t-core" data-node="filter"
+            data-info="Filter: two-level — Postgres side (FOR TABLE in the publication, server-side WAL skip) and Go side (action filtering). Empty filter = pass everything. Configured via --tables and --actions.">
+            <span class="nlabel">Filter</span>
+            <span class="nann">tables · actions</span>
+          </button>
+          <button class="iarch-node t-core" data-node="chain"
+            data-info="Sink Chain: composed via the decorator pattern. MetricsSink wraps RetrySink wraps the InnerSink. Add or remove decorators independently. See slide 7 for an interactive demo.">
+            <span class="nlabel">Sink Chain</span>
+            <span class="nann">decorators</span>
+          </button>
+        </div>
+
+        <div class="iarch-tier">
+          <button class="iarch-node t-sink" data-node="stdout"
+            data-info="stdout: NDJSON to stdout — one JSON object per line. Pipe to jq, log aggregators, anything that reads newline-delimited JSON. Zero dependencies, perfect for testing.">
+            <span class="nlabel">stdout</span>
+            <span class="nann">NDJSON</span>
+          </button>
+          <button class="iarch-node t-sink sk-webhook" data-node="webhook"
+            data-info="webhook: HTTP POST per event. X-PGCDC-Action and X-PGCDC-Table headers. 10s timeout. Non-2xx responses trigger the RetrySink. Perfect for serverless functions, REST endpoints.">
+            <span class="nlabel">webhook</span>
+            <span class="nann">HTTP POST</span>
+          </button>
+          <button class="iarch-node t-sink sk-kafka" data-node="kafka"
+            data-info="kafka: per-table topics following Debezium convention (pgcdc.public.users). Row-id as message key for ordering. Uses franz-go (pure Go, no CGo). RequiredAcks=all for durability.">
+            <span class="nlabel">kafka</span>
+            <span class="nann">per-table topics</span>
+          </button>
+          <button class="iarch-node t-sink sk-dlq" data-node="dlq"
+            data-info="DLQ: dead-letter queue. When all retries fail, events are written to a JSONL file (one entry per line) and the stream continues. Inspect with jq, replay manually. Without it, one poison event halts everything.">
+            <span class="nlabel">DLQ</span>
+            <span class="nann">JSONL file</span>
+          </button>
+        </div>
+      </div>
+      <div class="iarch-detail" id="archDetail">
+        <span class="dtitle">▸ click a node</span>
+        <span class="ddesc">Hover any component to highlight its connections. Click to inspect. Press <span class="dhint">▶ stream events</span> to watch live data flow through the pipeline.</span>
+      </div>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">8 components · 1 binary</span>
+    <span class="repo">cmd/pgcdc + cmd/pgproxy</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 7 — SINK DECORATOR PATTERN
+     =========================================== -->
+<section class="slide" data-title="Sink Chain">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">internal/sink/sink.go</span>
+    <span class="slide-num">07 / 16</span>
+  </div>
+  <div class="content">
+    <div class="section-banner reveal">
+      <div class="eyebrow">Chapter 5 · composition</div>
+      <h2>Sinks compose as <span class="hl">decorators</span></h2>
+      <div class="sub">Each layer adds one concern. Stack them however you want — metrics + retry + webhook, or batch + kafka, or anything else.</div>
+    </div>
+    <div class="chain-builder reveal-scale">
+      <div class="chain-controls">
+        <h4>// compose your chain</h4>
+        <label class="toggle-row on" data-toggle="metrics">
+          <span class="toggle-switch"></span>
+          <span class="toggle-info">
+            <div class="tname">MetricsSink</div>
+            <div class="trole">observability · Prometheus counters + latency</div>
+          </span>
+        </label>
+        <label class="toggle-row on" data-toggle="retry">
+          <span class="toggle-switch"></span>
+          <span class="toggle-info">
+            <div class="tname">RetrySink</div>
+            <div class="trole">reliability · exponential backoff + DLQ fallback</div>
+          </span>
+        </label>
+        <label class="toggle-row" data-toggle="batch">
+          <span class="toggle-switch"></span>
+          <span class="toggle-info">
+            <div class="tname">BatchSink</div>
+            <div class="trole">throughput · size + time triggers</div>
+          </span>
+        </label>
+        <div>
+          <h4 style="margin-top:0.4rem">// destination</h4>
+          <div class="dest-select" id="destSelect">
+            <button class="dest-btn active" data-dest="stdout">stdout</button>
+            <button class="dest-btn" data-dest="webhook">webhook</button>
+            <button class="dest-btn" data-dest="kafka">kafka</button>
+          </div>
+        </div>
+        <button class="fire-btn" id="fireEvent">▶ deliver event</button>
+      </div>
+      <div class="chain-vis" id="chainVis">
+        <div class="deco outer" data-layer="metrics">
+          <span class="deco-label">MetricsSink</span>
+          <span class="deco-role">// records latency</span>
+        </div>
+        <div class="deco-conn" data-conn="metrics-next"></div>
+        <div class="deco middle" data-layer="retry">
+          <span class="deco-label">RetrySink</span>
+          <span class="deco-role">// 5 attempts · backoff</span>
+        </div>
+        <div class="deco-conn" data-conn="retry-next"></div>
+        <div class="deco middle" data-layer="batch" style="border-left-color:var(--blue);background:linear-gradient(90deg,rgba(88,166,255,0.08) 0%,var(--bg-elev) 60%)">
+          <span class="deco-label">BatchSink</span>
+          <span class="deco-role">// flush 100 / 500ms</span>
+        </div>
+        <div class="deco-conn" data-conn="batch-next"></div>
+        <div class="deco inner" data-layer="dest">
+          <span class="deco-label" id="destLabel">StdoutSink</span>
+          <span class="deco-role">// final delivery</span>
+        </div>
+        <div class="chain-particle" id="chainParticle"></div>
+        <div class="chain-status" id="chainStatus">idle · click ▶ deliver to fire an event</div>
+      </div>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">decorator pattern · GoF</span>
+    <span class="repo">5 sinks · 4 decorators</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 8 — SINK GALLERY
+     =========================================== -->
+<section class="slide" data-title="Sinks">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">internal/sink/*.go</span>
+    <span class="slide-num">08 / 16</span>
+  </div>
+  <div class="content">
+    <div class="section-banner reveal">
+      <div class="eyebrow">Chapter 5 · destinations</div>
+      <h2>Ship events anywhere</h2>
+      <div class="sub">Five sinks today. Adding a sixth means writing ~80 lines and one test file.</div>
+    </div>
+    <div class="sink-grid reveal">
+      <div class="sink-card s1">
+        <div class="icon">▤</div>
+        <div class="name">stdout</div>
+        <div class="desc">NDJSON to stdout. Pipe to <code style="color:var(--yellow)">jq</code>, log aggregators, anything that reads newline-delimited JSON.</div>
+      </div>
+      <div class="sink-card s2">
+        <div class="icon">↗</div>
+        <div class="name">webhook</div>
+        <div class="desc">HTTP POST per event. <code style="color:var(--yellow)">X-PGCDC-Action</code> and <code style="color:var(--yellow)">X-PGCDC-Table</code> headers. Non-2xx triggers retry.</div>
+      </div>
+      <div class="sink-card s3">
+        <div class="icon">⬢</div>
+        <div class="name">kafka</div>
+        <div class="desc">Per-table topics following Debezium convention. <code style="color:var(--yellow)">pgcdc.public.users</code>. Row-id as message key for ordering.</div>
+      </div>
+      <div class="sink-card s4">
+        <div class="icon">▦</div>
+        <div class="name">stdout-batch</div>
+        <div class="desc">Batched JSON arrays. Useful for testing the batching pipeline without spinning up downstream infra.</div>
+      </div>
+      <div class="sink-card s5">
+        <div class="icon">↬</div>
+        <div class="name">webhook-batch</div>
+        <div class="desc">Single HTTP POST per batch. <code style="color:var(--yellow)">X-PGCDC-Batch-Size</code> header. 30s timeout for larger payloads.</div>
+      </div>
+    </div>
+    <div class="reveal" style="font-size:var(--small-size);color:var(--text-dim);line-height:1.6;text-align:center;max-width:80ch;margin:0 auto">
+      All sinks support <span class="bright">at-least-once</span> delivery semantics. Consumers can dedupe by tracking the <span class="accent">LSN</span> on each event.
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">5 sinks · plug-and-play</span>
+    <span class="repo">internal/sink</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 9 — DELIVERY GUARANTEES (RETRY + DLQ)
+     =========================================== -->
+<section class="slide" data-title="Delivery Guarantees">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">internal/sink/retry.go + dlq.go</span>
+    <span class="slide-num">09 / 16</span>
+  </div>
+  <div class="content">
+    <div class="section-banner reveal">
+      <div class="eyebrow">Chapter 6 · the hard parts</div>
+      <h2>Getting events is easy. <span class="hl">Delivering them reliably</span> is the engineering.</h2>
+      <div class="sub">Exponential backoff + jitter + dead-letter queue. The stream survives poison events.</div>
+    </div>
+    <div class="retry-flow reveal">
+      <div class="retry-step">
+        <div class="num">try 1</div>
+        <div>POST /webhook</div>
+      </div>
+      <div class="retry-arrow">→</div>
+      <div class="retry-step fail">
+        <div class="num">503</div>
+        <div>backoff 100ms</div>
+      </div>
+      <div class="retry-arrow">→</div>
+      <div class="retry-step fail">
+        <div class="num">503</div>
+        <div>backoff 200ms</div>
+      </div>
+      <div class="retry-arrow">→</div>
+      <div class="retry-step fail">
+        <div class="num">503</div>
+        <div>backoff 400ms</div>
+      </div>
+      <div class="retry-arrow">→</div>
+      <div class="retry-step fail">
+        <div class="num">try 5</div>
+        <div>503</div>
+      </div>
+      <div class="retry-arrow">→</div>
+      <div class="retry-step dlq">
+        <div class="num">DLQ</div>
+        <div>parked</div>
+      </div>
+    </div>
+    <div class="three-col reveal">
+      <div class="kv accent-g" style="padding:clamp(0.7rem,1.4vw,1rem)">
+        <div class="k">EXPONENTIAL BACKOFF</div>
+        <div class="v" style="margin-top:0.4rem;font-size:0.95em">100ms → 200ms → 400ms → 800ms — with <span class="accent">jitter</span> (0.5×–1.5×) so multiple instances don't thundering-herd the downstream.</div>
+      </div>
+      <div class="kv accent-o" style="padding:clamp(0.7rem,1.4vw,1rem)">
+        <div class="k">AT-LEAST-ONCE</div>
+        <div class="v" style="margin-top:0.4rem;font-size:0.95em">If <code style="color:var(--yellow)">Deliver()</code> errors → don't ack the LSN. On restart, Postgres replays from the last ack'd position. <span class="dim">Never lose events.</span></div>
+      </div>
+      <div class="kv accent-m" style="padding:clamp(0.7rem,1.4vw,1rem)">
+        <div class="k">DEAD-LETTER QUEUE</div>
+        <div class="v" style="margin-top:0.4rem;font-size:0.95em">All retries exhausted? Write event to a JSONL file. Return nil. <span class="accent">Stream keeps flowing.</span> Operator inspects + replays manually.</div>
+      </div>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">at-least-once · 4 retries · DLQ</span>
+    <span class="repo">poison events parked, not dropped</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 10 — BATCHING (SIZE + TIME)
+     =========================================== -->
+<section class="slide" data-title="Batching">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">internal/sink/batch.go</span>
+    <span class="slide-num">10 / 16</span>
+  </div>
+  <div class="content">
+    <div class="section-banner reveal">
+      <div class="eyebrow">Chapter 6 · throughput</div>
+      <h2>Two flush triggers. <span class="hl">Whichever fires first</span>.</h2>
+      <div class="sub">One HTTP POST with 100 events is much cheaper than 100 individual POSTs. The trick is knowing when to send the batch.</div>
+    </div>
+    <div class="batch-visual reveal">
+      <div class="batch-trigger size">
+        <div class="label">Trigger 1</div>
+        <h3>Size · buffer ≥ maxSize</h3>
+        <div class="desc">Buffer fills up to <strong>100 events</strong> → flush immediately, synchronously, inside <code style="color:var(--yellow)">Deliver()</code>. No waiting.</div>
+        <div class="buffer-dots">
+          <div class="buffer-dot filled"></div><div class="buffer-dot filled"></div><div class="buffer-dot filled"></div><div class="buffer-dot filled"></div><div class="buffer-dot filled"></div><div class="buffer-dot filled"></div><div class="buffer-dot filled"></div><div class="buffer-dot"></div><div class="buffer-dot"></div><div class="buffer-dot"></div>
+        </div>
+      </div>
+      <div class="batch-trigger time">
+        <div class="label">Trigger 2</div>
+        <h3>Time · maxWait elapsed</h3>
+        <div class="desc">Buffer half-full at <strong>500ms</strong>? Background timer fires → flush whatever's there. Low-traffic moments don't get stuck.</div>
+        <div class="timer-ring">
+          <svg viewBox="0 0 80 80">
+            <circle class="track" cx="40" cy="40" r="32"/>
+            <circle class="fill" cx="40" cy="40" r="32"/>
+          </svg>
+          <div class="timer-label">500ms</div>
+        </div>
+      </div>
+    </div>
+    <div class="reveal" style="font-size:var(--small-size);color:var(--text-dim);line-height:1.6;max-width:90ch;margin:0 auto;text-align:center">
+      <span class="bright">Concurrency gotcha:</span> the timer goroutine and the <code style="color:var(--yellow)">Deliver()</code> goroutine both touch the buffer.<br>
+      <span class="dim">A mutex protects it. The context for the timer-flush is captured on the </span><span class="accent">first Deliver call</span><span class="dim"> — never a stale per-call ctx.</span>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">batch · 500ms window · 100 max</span>
+    <span class="repo">dual triggers · mutex-protected</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 11 — THE PROXY (WHY)
+     =========================================== -->
+<section class="slide" data-title="The Proxy">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">cmd/pgproxy/main.go</span>
+    <span class="slide-num">11 / 16</span>
+  </div>
+  <div class="content">
+    <div class="section-banner reveal">
+      <div class="eyebrow">Chapter 7 · companion tool</div>
+      <h2>One Postgres, <span class="hl">two roles</span></h2>
+      <div class="sub">A transparent TCP proxy that parses the Postgres wire protocol — routes SELECTs to a replica, writes to the primary, pins transactions.</div>
+    </div>
+    <div class="proxy-grid reveal-scale">
+      <div class="proxy-side">
+        <div class="proxy-node">
+          <div style="font-weight:600;color:var(--text-bright)">App</div>
+          <div class="role">localhost:5434</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:clamp(0.5rem,1vw,0.8rem)">
+        <div class="proxy-arrow"><span class="a-line">⇄</span><span class="a-tag">TCP · pgwire</span></div>
+        <div class="proxy-center">
+          <div class="name">pgproxy</div>
+          <div class="port">:5434</div>
+          <div class="actions">parse wire protocol<br>classify queries<br>track transactions</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:clamp(0.5rem,1vw,0.8rem);width:100%">
+          <div class="proxy-arrow write"><span class="a-tag">WRITE · TXN</span><span class="a-line">→</span></div>
+          <div class="proxy-arrow read"><span class="a-tag">READ</span><span class="a-line">→</span></div>
+        </div>
+      </div>
+      <div class="proxy-side">
+        <div class="proxy-node primary">
+          <div style="font-weight:600;color:var(--text-bright)">Primary</div>
+          <div class="role">:5433 · writable</div>
+        </div>
+        <div class="proxy-node replica">
+          <div style="font-weight:600;color:var(--text-bright)">Replica</div>
+          <div class="role">:5435 · read-only</div>
+        </div>
+      </div>
+    </div>
+    <div class="three-col reveal">
+      <div class="kv accent-g" style="padding:clamp(0.6rem,1.2vw,0.9rem)">
+        <div class="k">Why split reads?</div>
+        <div class="v" style="margin-top:0.3rem;font-size:0.9em">Scale read throughput without buying a bigger primary. Reads are usually 10–100× writes in volume.</div>
+      </div>
+      <div class="kv accent-b" style="padding:clamp(0.6rem,1.2vw,0.9rem)">
+        <div class="k">Safety property</div>
+        <div class="v" style="margin-top:0.3rem;font-size:0.9em">Misrouting a read → primary = suboptimal. Misrouting a write → replica = clear error. <span class="accent">Conservative defaults.</span></div>
+      </div>
+      <div class="kv accent-o" style="padding:clamp(0.6rem,1.2vw,0.9rem)">
+        <div class="k">Transactions pinned</div>
+        <div class="v" style="margin-top:0.3rem;font-size:0.9em">BEGIN → every query goes to primary until COMMIT/ROLLBACK. <span class="dim">Even SELECTs.</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">proxy listening · :5434</span>
+    <span class="repo">primary + replica via pgx pool</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 12 — WIRE PROTOCOL
+     =========================================== -->
+<section class="slide" data-title="Wire Protocol">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">internal/proxy/proxy.go</span>
+    <span class="slide-num">12 / 16</span>
+  </div>
+  <div class="content">
+    <div class="section-banner reveal">
+      <div class="eyebrow">Chapter 7 · the handshake</div>
+      <h2>Speaking <span class="hl">pgwire</span> by hand</h2>
+      <div class="sub">Raw TCP on the client side (to intercept and classify) · pgx pools on the backend (for SCRAM-SHA-256 auth).</div>
+    </div>
+    <div class="seq-diagram reveal">
+      <div class="seq-actor">Client</div>
+      <div class="seq-actor">pgproxy</div>
+
+      <div class="seq-line lr"><span class="arrow">→</span><span><span class="kw">SSLRequest</span> · int32(80877103)</span></div>
+      <div class="seq-line rl"><span><span class="msg">'N'</span> <span class="dim">(SSL rejected — retry plain)</span></span><span class="arrow">←</span></div>
+
+      <div class="seq-line lr"><span class="arrow">→</span><span><span class="kw">StartupMessage</span> · user=lab · db=wallab</span></div>
+      <div class="seq-line rl"><span><span class="msg">AuthenticationOk · ParameterStatus × 6</span></span><span class="arrow">←</span></div>
+      <div class="seq-line rl"><span><span class="msg">BackendKeyData · ReadyForQuery</span> <span class="accent">'I'</span></span><span class="arrow">←</span></div>
+
+      <div class="seq-mode">▸ query loop ▸</div>
+
+      <div class="seq-line lr"><span class="arrow">→</span><span><span class="kw">Q</span> · <span class="str">"SELECT * FROM users"</span></span></div>
+      <div class="seq-line rl"><span><span class="kw">T</span> RowDescription · <span class="kw">D</span> DataRow × n · <span class="kw">C</span> CommandComplete</span><span class="arrow">←</span></div>
+      <div class="seq-line rl"><span><span class="kw">Z</span> ReadyForQuery · <span class="accent">'I'</span> idle · <span class="kw">'T'</span> in-tx · <span class="kw">'E'</span> failed-tx</span><span class="arrow">←</span></div>
+    </div>
+    <div class="reveal" style="font-size:var(--small-size);color:var(--text-dim);line-height:1.6;max-width:90ch;margin:0 auto;text-align:center">
+      <span class="bright">The Z byte matters:</span> 'I' when idle, 'T' inside a transaction, 'E' after an error inside one.<br>
+      <span class="dim">Hardcoded 'I' = broken transactions = silent client confusion.</span>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">pgwire · 3.0 protocol</span>
+    <span class="repo">manual parsing · pgx for backends</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 13 — QUERY CLASSIFIER
+     =========================================== -->
+<section class="slide" data-title="Query Routing">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">internal/proxy/classifier.go</span>
+    <span class="slide-num">13 / 16</span>
+  </div>
+  <div class="content">
+    <div class="section-banner reveal">
+      <div class="eyebrow">Chapter 7 · live routing demo</div>
+      <h2>Type SQL · watch it <span class="hl">route in real time</span></h2>
+      <div class="sub">The classifier inspects the first keyword after stripping comments. Try the samples below or type your own.</div>
+    </div>
+    <div class="router-shell reveal">
+      <div class="router-input-row">
+        <span class="rprompt">SQL ▸</span>
+        <input class="router-input" id="sqlInput" type="text"
+          placeholder="type a query — e.g. SELECT * FROM users"
+          value="SELECT * FROM users WHERE id = 1"
+          autocomplete="off" spellcheck="false">
+      </div>
+      <div class="router-samples" id="routerSamples">
+        <button class="sample-btn" data-sql="SELECT * FROM users WHERE id = 1">SELECT users</button>
+        <button class="sample-btn" data-sql="INSERT INTO orders(total) VALUES(99)">INSERT order</button>
+        <button class="sample-btn" data-sql="UPDATE users SET name = 'alice' WHERE id = 1">UPDATE user</button>
+        <button class="sample-btn" data-sql="DELETE FROM sessions WHERE expired = true">DELETE rows</button>
+        <button class="sample-btn" data-sql="BEGIN">BEGIN</button>
+        <button class="sample-btn" data-sql="COMMIT">COMMIT</button>
+        <button class="sample-btn" data-sql="EXPLAIN ANALYZE SELECT 1">EXPLAIN</button>
+        <button class="sample-btn" data-sql="-- get top users\nSELECT * FROM users LIMIT 10">comment + SELECT</button>
+        <button class="sample-btn" data-sql="COPY users TO STDOUT">COPY TO</button>
+        <button class="sample-btn" data-sql="COPY users FROM STDIN">COPY FROM</button>
+        <button class="sample-btn" data-sql="VACUUM ANALYZE">VACUUM</button>
+      </div>
+
+      <div class="router-stage">
+        <div class="end-node" id="endClient">
+          <div class="ename">Client</div>
+          <div class="erole">your app</div>
+        </div>
+        <div class="end-node proxy" id="endProxy">
+          <div class="ename">pgproxy</div>
+          <div class="erole">classify · route</div>
+        </div>
+        <div class="targets">
+          <div class="router-track" id="trackUp">
+            <div class="track-line up"></div>
+            <div class="track-pkt" id="pktUp"></div>
+          </div>
+          <div class="end-node replica" id="endReplica">
+            <div class="ename">Replica</div>
+            <div class="erole">:5435 read-only</div>
+          </div>
+          <div class="router-track" id="trackDown">
+            <div class="track-line down"></div>
+            <div class="track-pkt" id="pktDown"></div>
+          </div>
+          <div class="end-node primary" id="endPrimary">
+            <div class="ename">Primary</div>
+            <div class="erole">:5433 writable</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="router-verdict">
+        <div class="verdict-cell" id="verdictKeyword">
+          <div class="vlabel">First keyword</div>
+          <div class="vvalue">—</div>
+        </div>
+        <div class="verdict-cell" id="verdictType">
+          <div class="vlabel">Classification</div>
+          <div class="vvalue">—</div>
+        </div>
+        <div class="verdict-cell" id="verdictRoute">
+          <div class="vlabel">Routed to</div>
+          <div class="vvalue">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="classifier-table reveal" id="classifierTable" style="font-size:0.92em">
+      <div class="classifier-row header">
+        <div>First keyword</div>
+        <div>Classification</div>
+        <div>Route to</div>
+      </div>
+      <div class="classifier-row" data-rule="read">
+        <div class="keyword">SELECT · SHOW · EXPLAIN · SET · RESET · DISCARD</div>
+        <div class="type read">▸ READ</div>
+        <div class="route">replica :5435</div>
+      </div>
+      <div class="classifier-row" data-rule="write">
+        <div class="keyword">INSERT · UPDATE · DELETE · CREATE · ALTER · DROP · TRUNCATE · VACUUM</div>
+        <div class="type write">▸ WRITE</div>
+        <div class="route">primary :5433</div>
+      </div>
+      <div class="classifier-row" data-rule="txn-open">
+        <div class="keyword">BEGIN · START</div>
+        <div class="type txn">▸ TXN-OPEN</div>
+        <div class="route">primary · pin</div>
+      </div>
+      <div class="classifier-row" data-rule="txn-close">
+        <div class="keyword">COMMIT · END · ROLLBACK · SAVEPOINT · RELEASE</div>
+        <div class="type txn">▸ TXN-CLOSE</div>
+        <div class="route">primary · unpin</div>
+      </div>
+      <div class="classifier-row" data-rule="copy">
+        <div class="keyword">COPY ... TO (read) vs COPY ... FROM (write)</div>
+        <div class="type" style="color:var(--magenta)">▸ HYBRID</div>
+        <div class="route">scan body</div>
+      </div>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">classifier · O(1) per query</span>
+    <span class="repo">conservative routing</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 14 — METRICS / OBSERVABILITY
+     =========================================== -->
+<section class="slide" data-title="Observability">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">curl localhost:2112/metrics</span>
+    <span class="slide-num">14 / 16</span>
+  </div>
+  <div class="content">
+    <div class="section-banner reveal">
+      <div class="eyebrow">Chapter 8 · operability</div>
+      <h2>Prometheus metrics, end to end</h2>
+      <div class="sub">Eight metric families covering throughput, latency, lag, retry behavior, batch dynamics. Scrape from <code style="color:var(--yellow)">:2112/metrics</code>.</div>
+    </div>
+    <div class="metrics-grid reveal">
+      <div class="metric-card green">
+        <div class="metric-name">pgcdc_events_total {action="INSERT",status="delivered"}</div>
+        <div class="metric-value" data-counter data-target="12847" data-decimals="0">0<span class="metric-unit">events</span></div>
+        <svg class="metric-sparkline" viewBox="0 0 100 30" preserveAspectRatio="none">
+          <polyline points="0,22 10,20 20,18 30,15 40,16 50,12 60,10 70,11 80,8 90,5 100,4" fill="none" stroke="var(--green)" stroke-width="1.5"/>
+        </svg>
+      </div>
+      <div class="metric-card blue">
+        <div class="metric-name">pgcdc_replication_lag_seconds</div>
+        <div class="metric-value" data-counter data-target="0.04" data-decimals="2">0<span class="metric-unit">seconds</span></div>
+        <svg class="metric-sparkline" viewBox="0 0 100 30" preserveAspectRatio="none">
+          <polyline points="0,8 10,10 20,7 30,9 40,6 50,8 60,5 70,7 80,6 90,8 100,7" fill="none" stroke="var(--blue)" stroke-width="1.5"/>
+        </svg>
+      </div>
+      <div class="metric-card orange">
+        <div class="metric-name">pgcdc_delivery_duration_seconds {p99}</div>
+        <div class="metric-value" data-counter data-target="12" data-decimals="0">0<span class="metric-unit">ms</span></div>
+        <svg class="metric-sparkline" viewBox="0 0 100 30" preserveAspectRatio="none">
+          <polyline points="0,15 10,12 20,14 30,11 40,13 50,10 60,9 70,11 80,8 90,10 100,9" fill="none" stroke="var(--orange)" stroke-width="1.5"/>
+        </svg>
+      </div>
+      <div class="metric-card magenta">
+        <div class="metric-name">pgcdc_retries_total {outcome="success"}</div>
+        <div class="metric-value" data-counter data-target="47" data-decimals="0">0<span class="metric-unit">retries</span></div>
+        <svg class="metric-sparkline" viewBox="0 0 100 30" preserveAspectRatio="none">
+          <polyline points="0,20 10,18 20,21 30,17 40,19 50,15 60,16 70,12 80,14 90,11 100,12" fill="none" stroke="var(--magenta)" stroke-width="1.5"/>
+        </svg>
+      </div>
+    </div>
+    <div class="codeblock reveal">
+      <div style="font-size:var(--tiny-size);color:var(--text-dim);letter-spacing:0.1em;margin-bottom:0.4rem">// USEFUL QUERIES</div>
+      <div class="ln" data-ln="1"><span class="comment"># events/sec, by action</span></div>
+      <div class="ln" data-ln="2"><span class="bright">rate</span>(<span class="key">pgcdc_events_total</span>[<span class="val">5m</span>])</div>
+      <div class="ln" data-ln="3"></div>
+      <div class="ln" data-ln="4"><span class="comment"># p99 delivery latency, per sink</span></div>
+      <div class="ln" data-ln="5"><span class="bright">histogram_quantile</span>(<span class="val">0.99</span>, <span class="bright">rate</span>(<span class="key">pgcdc_delivery_duration_seconds_bucket</span>[<span class="val">5m</span>]))</div>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">metrics endpoint · :2112</span>
+    <span class="repo">8 families · promauto</span>
+    <span>↓ next</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 15 — REFLECTION
+     =========================================== -->
+<section class="slide" data-title="Reflection">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">~/.zsh_history · 2 AM</span>
+    <span class="slide-num">15 / 16</span>
+  </div>
+  <div class="content">
+    <div class="reflection">
+      <div class="reveal" style="font-size:var(--tiny-size);color:var(--text-dim);letter-spacing:0.2em;text-transform:uppercase">// what this taught me</div>
+      <div class="reflection-quote reveal">
+        I understood WAL conceptually before this project.<br>
+        But there's a difference between <span class="em">reading about replication slots</span> and watching your code consume one.<br>
+        Between <span class="em">knowing about the wire protocol</span> and parsing <code style="color:var(--green);font-size:0.7em;padding:0.05em 0.3em;background:var(--bg-deep);border-radius:2px">'Z'</code> bytes off a TCP socket at 2 AM.
+      </div>
+      <div class="reflection-attr reveal">building waltap · 2026</div>
+      <div class="two-col reveal" style="margin-top:0.5rem">
+        <div class="kv accent-g" style="padding:clamp(0.8rem,1.6vw,1.2rem)">
+          <div class="k">The deepest lesson</div>
+          <div class="v" style="margin-top:0.4rem;font-size:0.95em;line-height:1.55">WAL isn't a logging system that happens to enable recovery. It's a <span class="accent">recovery system that happens to look like a log.</span> Once that flips, replication, PITR, and CDC stop feeling like magic.</div>
+        </div>
+        <div class="kv accent-m" style="padding:clamp(0.8rem,1.6vw,1.2rem)">
+          <div class="k">The honest truth</div>
+          <div class="v" style="margin-top:0.4rem;font-size:0.95em;line-height:1.55">waltap isn't production-grade infrastructure. It's a <span class="accent">learning project.</span> But building it taught me more about Postgres internals than any book, course, or talk I'd consumed before.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">page 15 · the journey</span>
+    <span class="repo">writing-ahead the engineer</span>
+    <span>↓ final slide</span>
+  </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 16 — CTA / GITHUB REVEAL
+     =========================================== -->
+<section class="slide" data-title="Get the Code">
+  <div class="title-bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">git clone — and read</span>
+    <span class="slide-num">16 / 16</span>
+  </div>
+  <div class="content" style="justify-content:center;gap:clamp(1rem,2vw,1.6rem)">
+    <div class="reveal" style="font-size:var(--body-size);color:var(--text-dim);text-align:center;line-height:1.6;max-width:70ch;margin:0 auto">
+      <span class="bright">If you're curious about WAL, logical replication, or the wire protocol —</span><br>
+      the code and docs might be a useful companion.
+    </div>
+    <div class="cta-block reveal-scale">
+      <h2>walt<span class="accent">ap</span></h2>
+      <div style="font-size:var(--body-size);color:var(--text-dim);line-height:1.55">PostgreSQL CDC pipeline + read/write split proxy · written in Go</div>
+      <a href="https://github.com/12345debdut/waltap" class="url" target="_blank" rel="noopener">github.com/12345debdut/waltap</a>
+      <div class="tagline">Open source · MIT licensed · ~5,000 lines of Go · 86% test coverage on proxy, 83% on sink · learn-by-building.</div>
+    </div>
+    <div class="three-col reveal" style="max-width:900px;margin:0 auto">
+      <div class="kv accent-g" style="padding:clamp(0.6rem,1.2vw,0.9rem);text-align:center">
+        <div class="k">git clone</div>
+        <div class="v" style="margin-top:0.3rem;font-size:0.85em;font-family:'JetBrains Mono',monospace">→ docker-compose up</div>
+      </div>
+      <div class="kv accent-b" style="padding:clamp(0.6rem,1.2vw,0.9rem);text-align:center">
+        <div class="k">explore</div>
+        <div class="v" style="margin-top:0.3rem;font-size:0.85em;font-family:'JetBrains Mono',monospace">docs/wal-and-logical-replication.md</div>
+      </div>
+      <div class="kv accent-m" style="padding:clamp(0.6rem,1.2vw,0.9rem);text-align:center">
+        <div class="k">share</div>
+        <div class="v" style="margin-top:0.3rem;font-size:0.85em">questions, PRs, ideas — all welcome</div>
+      </div>
+    </div>
+    <div class="reveal" style="text-align:center;font-size:var(--small-size);color:var(--text-dim);line-height:1.6;margin-top:0.5rem">
+      Thanks for reading.<br>
+      <span style="color:var(--green)">— Debdut Saha</span>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="live">end of stream · 0/19D0000</span>
+    <span class="repo"><strong>github.com/12345debdut/waltap</strong></span>
+    <span>↑ replay</span>
+  </div>
+</section>
+
+<script>
+/* ===========================================
+   SLIDE PRESENTATION CONTROLLER
+   =========================================== */
+class SlidePresentation {
+  constructor() {
+    this.slides = Array.from(document.querySelectorAll('.slide'));
+    this.progressBar = document.getElementById('progressBar');
+    this.navDotsContainer = document.getElementById('navDots');
+    this.currentSlide = 0;
+    this.setupIntersectionObserver();
+    this.setupKeyboardNav();
+    this.setupTouchNav();
+    this.setupProgressBar();
+    this.setupNavDots();
+    this.setupCounterAnimations();
+  }
+
+  setupIntersectionObserver() {
+    // Add .visible class when slides enter viewport — triggers CSS animations
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          this.currentSlide = this.slides.indexOf(entry.target);
+          this.updateNavDots();
+          // Re-trigger counters when slide enters view
+          this.animateCountersIn(entry.target);
+        }
+      });
+    }, { threshold: 0.5 });
+    this.slides.forEach(slide => observer.observe(slide));
+  }
+
+  setupKeyboardNav() {
+    document.addEventListener('keydown', (e) => {
+      // Don't intercept keystrokes while editing text
+      if (e.target.getAttribute && e.target.getAttribute('contenteditable')) return;
+      if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
+        e.preventDefault();
+        this.goToSlide(this.currentSlide + 1);
+      } else if (e.key === 'ArrowUp' || e.key === 'PageUp') {
+        e.preventDefault();
+        this.goToSlide(this.currentSlide - 1);
+      } else if (e.key === 'Home') {
+        this.goToSlide(0);
+      } else if (e.key === 'End') {
+        this.goToSlide(this.slides.length - 1);
+      }
+    });
+  }
+
+  setupTouchNav() {
+    let touchStart = null;
+    document.addEventListener('touchstart', e => { touchStart = e.touches[0].clientY; }, { passive: true });
+    document.addEventListener('touchend', e => {
+      if (touchStart === null) return;
+      const dy = e.changedTouches[0].clientY - touchStart;
+      if (Math.abs(dy) > 50) {
+        if (dy < 0) this.goToSlide(this.currentSlide + 1);
+        else this.goToSlide(this.currentSlide - 1);
+      }
+      touchStart = null;
+    }, { passive: true });
+  }
+
+  setupProgressBar() {
+    const updateProgress = () => {
+      const scrolled = window.scrollY;
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      const pct = max > 0 ? (scrolled / max) * 100 : 0;
+      this.progressBar.style.width = pct + '%';
+    };
+    window.addEventListener('scroll', updateProgress, { passive: true });
+    updateProgress();
+  }
+
+  setupNavDots() {
+    // Always clear first to avoid duplication if outerHTML is re-mounted
+    this.navDotsContainer.innerHTML = '';
+    this.slides.forEach((slide, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'nav-dot';
+      btn.setAttribute('aria-label', `Slide ${i + 1}: ${slide.dataset.title || ''}`);
+      btn.addEventListener('click', () => this.goToSlide(i));
+      this.navDotsContainer.appendChild(btn);
+    });
+    this.updateNavDots();
+  }
+
+  updateNavDots() {
+    const dots = this.navDotsContainer.querySelectorAll('.nav-dot');
+    dots.forEach((d, i) => d.classList.toggle('active', i === this.currentSlide));
+  }
+
+  goToSlide(idx) {
+    if (idx < 0 || idx >= this.slides.length) return;
+    this.slides[idx].scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  setupCounterAnimations() {
+    // Counters animate when their slide becomes visible
+    this.animatedCounters = new WeakSet();
+  }
+
+  animateCountersIn(slide) {
+    const counters = slide.querySelectorAll('[data-counter]');
+    counters.forEach(el => {
+      if (this.animatedCounters.has(el)) return;
+      this.animatedCounters.add(el);
+      const target = parseFloat(el.dataset.target);
+      const decimals = parseInt(el.dataset.decimals || '0', 10);
+      const duration = 1400;
+      const start = performance.now();
+      const unitSpan = el.querySelector('.metric-unit');
+      const unitHTML = unitSpan ? unitSpan.outerHTML : '';
+      const tick = (now) => {
+        const t = Math.min(1, (now - start) / duration);
+        const eased = 1 - Math.pow(1 - t, 3);
+        const val = target * eased;
+        const formatted = decimals > 0 ? val.toFixed(decimals) : Math.floor(val).toLocaleString();
+        el.innerHTML = formatted + unitHTML;
+        if (t < 1) requestAnimationFrame(tick);
+        else {
+          el.style.animation = 'counter-pop 0.4s ease';
+          setTimeout(() => el.style.animation = '', 400);
+        }
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+}
+
+/* ===========================================
+   INLINE EDITOR
+   =========================================== */
+class InlineEditor {
+  constructor() {
+    this.isActive = false;
+    this.toggle = document.getElementById('editToggle');
+    this.banner = document.getElementById('editBanner');
+    this.hotzone = document.getElementById('editHotzone');
+    // Editable: every text-bearing element inside slides — but skip code/structural elements
+    this.editableSelectors = 'h1, h2, h3, .sub, .desc, .v, .label, .name, .tagline, .reflection-quote, .hook-quote, .banner-hero .title, .banner-hero .sub, .section-banner h2, .section-banner .sub, .section-banner .eyebrow, .cta-block h2, .panel-label, .metric-name, .step-row';
+    this.setupHover();
+    this.setupClicks();
+    this.setupKeyboard();
+    this.loadFromStorage();
+  }
+
+  setupHover() {
+    let hideTimeout = null;
+    this.hotzone.addEventListener('mouseenter', () => {
+      clearTimeout(hideTimeout);
+      this.toggle.classList.add('show');
+    });
+    this.hotzone.addEventListener('mouseleave', () => {
+      hideTimeout = setTimeout(() => {
+        if (!this.isActive) this.toggle.classList.remove('show');
+      }, 400);
+    });
+    this.toggle.addEventListener('mouseenter', () => clearTimeout(hideTimeout));
+    this.toggle.addEventListener('mouseleave', () => {
+      hideTimeout = setTimeout(() => {
+        if (!this.isActive) this.toggle.classList.remove('show');
+      }, 400);
+    });
+    this.hotzone.addEventListener('click', () => this.toggleEditMode());
+  }
+
+  setupClicks() {
+    this.toggle.addEventListener('click', () => this.toggleEditMode());
+  }
+
+  setupKeyboard() {
+    document.addEventListener('keydown', (e) => {
+      // E key (when not already editing)
+      if ((e.key === 'e' || e.key === 'E') && !e.target.getAttribute('contenteditable')) {
+        if (!e.metaKey && !e.ctrlKey) {
+          this.toggleEditMode();
+          e.preventDefault();
+        }
+      }
+      // Ctrl+S / Cmd+S to export
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        this.exportFile();
+      }
+    });
+  }
+
+  toggleEditMode() {
+    this.isActive = !this.isActive;
+    document.body.classList.toggle('edit-active', this.isActive);
+    this.toggle.classList.toggle('active', this.isActive);
+    this.banner.classList.toggle('active', this.isActive);
+    if (this.isActive) {
+      this.toggle.classList.add('show');
+      const els = document.querySelectorAll(this.editableSelectors);
+      els.forEach(el => {
+        el.setAttribute('contenteditable', 'true');
+        el.addEventListener('input', () => this.saveToStorage());
+        el.addEventListener('blur', () => this.saveToStorage());
+      });
+    } else {
+      document.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
+    }
+  }
+
+  saveToStorage() {
+    try {
+      const editable = document.querySelectorAll('[contenteditable]');
+      const data = {};
+      editable.forEach((el, i) => { data[i] = el.innerHTML; });
+      localStorage.setItem('waltap-deck-edits', JSON.stringify(data));
+    } catch (e) {
+      console.warn('Could not save to localStorage:', e);
+    }
+  }
+
+  loadFromStorage() {
+    try {
+      const data = JSON.parse(localStorage.getItem('waltap-deck-edits') || '{}');
+      const els = document.querySelectorAll(this.editableSelectors);
+      Object.entries(data).forEach(([i, html]) => {
+        if (els[i]) els[i].innerHTML = html;
+      });
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  exportFile() {
+    // Strip edit state before capturing outerHTML
+    const editableEls = Array.from(document.querySelectorAll('[contenteditable]'));
+    editableEls.forEach(el => el.removeAttribute('contenteditable'));
+    document.body.classList.remove('edit-active');
+    this.toggle.classList.remove('active', 'show');
+    this.banner.classList.remove('active', 'show');
+
+    const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+
+    // Restore edit state so user can keep editing
+    if (this.isActive) {
+      document.body.classList.add('edit-active');
+      editableEls.forEach(el => el.setAttribute('contenteditable', 'true'));
+      this.toggle.classList.add('active');
+      this.banner.classList.add('active');
+    }
+
+    const blob = new Blob([html], { type: 'text/html' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'waltap-deck.html';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+}
+
+/* ===========================================
+   INTERACTIVE ARCHITECTURE (slide 6)
+   - SVG paths drawn dynamically between node centers
+   - Hover any node: highlight its connections
+   - Click any node: focus it + show detail
+   - Play button: animated particles flow Postgres → core → sinks
+   =========================================== */
+class InteractiveArch {
+  constructor() {
+    this.canvas = document.getElementById('archCanvas');
+    if (!this.canvas) return;
+    this.svg = document.getElementById('archSvg');
+    this.playBtn = document.getElementById('archPlay');
+    this.resetBtn = document.getElementById('archReset');
+    this.detail = document.getElementById('archDetail');
+    this.counter = document.getElementById('archCount');
+    this.nodes = Array.from(this.canvas.querySelectorAll('.iarch-node'));
+    this.playing = false;
+    this.eventCount = 0;
+    this.particleTimer = null;
+    this.particles = [];
+
+    // edges: source-node → target-node
+    this.edges = [
+      ['pg', 'snapshot'],
+      ['pg', 'stream'],
+      ['snapshot', 'filter'],
+      ['stream', 'filter'],
+      ['filter', 'chain'],
+      ['chain', 'stdout'],
+      ['chain', 'webhook'],
+      ['chain', 'kafka'],
+      ['chain', 'dlq'],
+    ];
+
+    this.setupNodes();
+    this.setupControls();
+    this.drawEdges();
+    // redraw on resize so paths stay aligned
+    this.resizeObserver = new ResizeObserver(() => this.drawEdges());
+    this.resizeObserver.observe(this.canvas);
+    window.addEventListener('resize', () => this.drawEdges());
+  }
+
+  setupNodes() {
+    this.nodes.forEach(node => {
+      node.addEventListener('mouseenter', () => this.highlightFromNode(node.dataset.node));
+      node.addEventListener('mouseleave', () => this.clearHighlight());
+      node.addEventListener('click', () => this.focusNode(node.dataset.node));
+    });
+  }
+
+  setupControls() {
+    this.playBtn?.addEventListener('click', () => this.togglePlay());
+    this.resetBtn?.addEventListener('click', () => this.reset());
+  }
+
+  nodeCenter(name) {
+    const node = this.canvas.querySelector(`[data-node="${name}"]`);
+    if (!node) return null;
+    const cb = this.canvas.getBoundingClientRect();
+    const nb = node.getBoundingClientRect();
+    return {
+      x: nb.left - cb.left + nb.width / 2,
+      y: nb.top - cb.top + nb.height / 2,
+      bottom: nb.bottom - cb.top,
+      top: nb.top - cb.top,
+      width: nb.width,
+      height: nb.height,
+    };
+  }
+
+  drawEdges() {
+    if (!this.svg || !this.canvas) return;
+    const cb = this.canvas.getBoundingClientRect();
+    this.svg.setAttribute('viewBox', `0 0 ${cb.width} ${cb.height}`);
+    this.svg.innerHTML = '';
+    this.edges.forEach(([from, to]) => {
+      const a = this.nodeCenter(from);
+      const b = this.nodeCenter(to);
+      if (!a || !b) return;
+      // Curve from bottom of A to top of B
+      const x1 = a.x, y1 = a.bottom;
+      const x2 = b.x, y2 = b.top;
+      const cy = (y1 + y2) / 2;
+      const d = `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}`;
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', d);
+      path.dataset.from = from;
+      path.dataset.to = to;
+      this.svg.appendChild(path);
+    });
+  }
+
+  highlightFromNode(name) {
+    // Find all edges this node touches
+    const touched = new Set();
+    const edges = this.edges.filter(([f, t]) => f === name || t === name);
+    edges.forEach(([f, t]) => { touched.add(f); touched.add(t); });
+    // Style nodes
+    this.nodes.forEach(n => {
+      n.classList.toggle('dimmed', touched.size > 0 && !touched.has(n.dataset.node));
+    });
+    // Style paths
+    this.svg.querySelectorAll('path').forEach(p => {
+      const hot = p.dataset.from === name || p.dataset.to === name;
+      p.classList.toggle('active', hot);
+      p.classList.toggle('dim', !hot && touched.size > 0);
+    });
+  }
+
+  clearHighlight() {
+    this.nodes.forEach(n => n.classList.remove('dimmed'));
+    this.svg.querySelectorAll('path').forEach(p => { p.classList.remove('active'); p.classList.remove('dim'); });
+  }
+
+  focusNode(name) {
+    this.nodes.forEach(n => n.classList.toggle('focused', n.dataset.node === name));
+    const node = this.canvas.querySelector(`[data-node="${name}"]`);
+    if (!node) return;
+    const info = node.dataset.info || '';
+    const label = node.querySelector('.nlabel')?.textContent || name;
+    this.detail.innerHTML = `<span class="dtitle">▸ ${label}</span><span class="ddesc">${info}</span>`;
+  }
+
+  togglePlay() {
+    this.playing = !this.playing;
+    this.playBtn.textContent = this.playing ? '⏸ pause stream' : '▶ stream events';
+    this.playBtn.dataset.active = this.playing;
+    this.playBtn.classList.toggle('active', this.playing);
+    if (this.playing) {
+      this.startParticleLoop();
+    } else {
+      this.stopParticleLoop();
+    }
+  }
+
+  reset() {
+    this.eventCount = 0;
+    this.counter.textContent = '0';
+    this.particles.forEach(p => p.remove());
+    this.particles = [];
+    if (this.playing) this.togglePlay();
+  }
+
+  startParticleLoop() {
+    const tick = () => {
+      if (!this.playing) return;
+      this.fireParticle();
+      this.particleTimer = setTimeout(tick, 600 + Math.random() * 600);
+    };
+    tick();
+  }
+
+  stopParticleLoop() {
+    if (this.particleTimer) {
+      clearTimeout(this.particleTimer);
+      this.particleTimer = null;
+    }
+  }
+
+  fireParticle() {
+    // pg → (snapshot or stream) → filter → chain → random sink
+    const firstHop = Math.random() < 0.3 ? 'snapshot' : 'stream';
+    const sinks = ['stdout', 'webhook', 'kafka'];
+    const sink = sinks[Math.floor(Math.random() * sinks.length)];
+    const route = ['pg', firstHop, 'filter', 'chain', sink];
+    this.animateAlong(route);
+  }
+
+  animateAlong(route) {
+    const particle = document.createElement('div');
+    particle.className = 'iarch-particle p-event';
+    this.canvas.appendChild(particle);
+    this.particles.push(particle);
+
+    let i = 0;
+    const hop = () => {
+      if (i >= route.length - 1) {
+        particle.style.transition = 'opacity 0.3s';
+        particle.style.opacity = '0';
+        setTimeout(() => {
+          particle.remove();
+          this.particles = this.particles.filter(p => p !== particle);
+        }, 350);
+        this.eventCount += 1;
+        this.counter.textContent = this.eventCount.toLocaleString();
+        return;
+      }
+      const a = this.nodeCenter(route[i]);
+      const b = this.nodeCenter(route[i + 1]);
+      if (!a || !b) return;
+      if (i === 0) {
+        // start position
+        particle.style.transition = 'none';
+        particle.style.transform = `translate(${a.x - 3}px, ${a.bottom - 3}px)`;
+        // force reflow
+        particle.offsetHeight;
+      }
+      particle.style.transition = `transform 0.5s cubic-bezier(0.65,0,0.35,1)`;
+      particle.style.transform = `translate(${b.x - 3}px, ${b.top - 3}px)`;
+      // flash the target node
+      const tgt = this.canvas.querySelector(`[data-node="${route[i + 1]}"]`);
+      if (tgt) {
+        tgt.style.transition = 'box-shadow 0.3s';
+        tgt.style.boxShadow = '0 0 14px var(--green-glow)';
+        setTimeout(() => { tgt.style.boxShadow = ''; }, 350);
+      }
+      i++;
+      setTimeout(hop, 520);
+    };
+    requestAnimationFrame(hop);
+  }
+}
+
+/* ===========================================
+   SINK CHAIN BUILDER (slide 7)
+   - Toggle each decorator on/off
+   - Choose destination (stdout/webhook/kafka)
+   - Fire a particle through the active chain
+   =========================================== */
+class SinkChainBuilder {
+  constructor() {
+    this.vis = document.getElementById('chainVis');
+    if (!this.vis) return;
+    this.state = { metrics: true, retry: true, batch: false, dest: 'stdout' };
+    this.destLabel = document.getElementById('destLabel');
+    this.particle = document.getElementById('chainParticle');
+    this.status = document.getElementById('chainStatus');
+    this.fireBtn = document.getElementById('fireEvent');
+    this.setupToggles();
+    this.setupDest();
+    this.setupFire();
+    this.render();
+  }
+
+  setupToggles() {
+    document.querySelectorAll('.toggle-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const key = row.dataset.toggle;
+        this.state[key] = !this.state[key];
+        row.classList.toggle('on', this.state[key]);
+        this.render();
+      });
+    });
+  }
+
+  setupDest() {
+    document.querySelectorAll('#destSelect .dest-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#destSelect .dest-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.state.dest = btn.dataset.dest;
+        this.render();
+      });
+    });
+  }
+
+  setupFire() {
+    this.fireBtn?.addEventListener('click', () => this.fireEvent());
+  }
+
+  render() {
+    // toggle decorator visibility
+    ['metrics', 'retry', 'batch'].forEach(key => {
+      const layer = this.vis.querySelector(`[data-layer="${key}"]`);
+      const conn = this.vis.querySelector(`[data-conn="${key}-next"]`);
+      const on = this.state[key];
+      if (layer) layer.classList.toggle('removed', !on);
+      if (conn) conn.classList.toggle('removed', !on);
+    });
+    // dest label
+    const destNames = { stdout: 'StdoutSink', webhook: 'WebhookSink', kafka: 'KafkaSink' };
+    const destRoles = { stdout: '// NDJSON to stdout', webhook: '// HTTP POST per event', kafka: '// per-table topics' };
+    if (this.destLabel) this.destLabel.textContent = destNames[this.state.dest];
+    const destRole = this.vis.querySelector('[data-layer="dest"] .deco-role');
+    if (destRole) destRole.textContent = destRoles[this.state.dest];
+  }
+
+  fireEvent() {
+    if (this.particle.classList.contains('firing')) return;
+    this.fireBtn.disabled = true;
+    // figure out the chain order — visible layers in display order
+    const order = [];
+    if (this.state.metrics) order.push({ name: 'MetricsSink', selector: '[data-layer="metrics"]', msg: 'recording latency' });
+    if (this.state.retry) order.push({ name: 'RetrySink', selector: '[data-layer="retry"]', msg: 'attempt 1/5' });
+    if (this.state.batch) order.push({ name: 'BatchSink', selector: '[data-layer="batch"]', msg: 'buffered (1/100)' });
+    order.push({ name: this.destLabel.textContent, selector: '[data-layer="dest"]', msg: `delivered to ${this.state.dest}` });
+
+    this.particle.style.transition = 'none';
+    this.particle.style.opacity = '0';
+    this.particle.style.top = '0px';
+    this.particle.classList.add('firing');
+    this.particle.offsetHeight;
+    this.particle.style.transition = 'opacity 0.2s';
+    this.particle.style.opacity = '1';
+
+    let i = 0;
+    const visRect = this.vis.getBoundingClientRect();
+    const step = () => {
+      if (i >= order.length) {
+        this.particle.style.transition = 'opacity 0.4s';
+        this.particle.style.opacity = '0';
+        this.particle.classList.remove('firing');
+        this.fireBtn.disabled = false;
+        this.status.classList.remove('error');
+        this.status.classList.add('success');
+        setTimeout(() => this.status.classList.remove('success'), 1200);
+        return;
+      }
+      const layer = this.vis.querySelector(order[i].selector);
+      if (!layer) { i++; step(); return; }
+      const lb = layer.getBoundingClientRect();
+      const top = lb.top - visRect.top + lb.height / 2 - 5;
+      this.particle.style.transition = 'top 0.45s cubic-bezier(0.65,0,0.35,1)';
+      this.particle.style.top = top + 'px';
+      // pulse the layer
+      layer.classList.remove('pulse');
+      layer.offsetHeight;
+      layer.classList.add('pulse');
+      this.status.textContent = `▸ ${order[i].name}: ${order[i].msg}`;
+      i++;
+      setTimeout(step, 480);
+    };
+    requestAnimationFrame(step);
+  }
+}
+
+/* ===========================================
+   LIVE SQL CLASSIFIER + ROUTER (slide 13)
+   - User types or picks a sample SQL query
+   - Classify it, animate routing to primary or replica
+   - Highlight the matching rule in the table
+   =========================================== */
+class SqlRouter {
+  constructor() {
+    this.input = document.getElementById('sqlInput');
+    if (!this.input) return;
+    this.samples = document.getElementById('routerSamples');
+    this.proxyNode = document.getElementById('endProxy');
+    this.primaryNode = document.getElementById('endPrimary');
+    this.replicaNode = document.getElementById('endReplica');
+    this.pktUp = document.getElementById('pktUp');
+    this.pktDown = document.getElementById('pktDown');
+    this.trackUp = document.getElementById('trackUp');
+    this.trackDown = document.getElementById('trackDown');
+    this.vKeyword = document.querySelector('#verdictKeyword .vvalue');
+    this.vType = document.querySelector('#verdictType .vvalue');
+    this.vRoute = document.querySelector('#verdictRoute .vvalue');
+    this.vTypeCell = document.getElementById('verdictType');
+    this.tableRows = document.querySelectorAll('#classifierTable .classifier-row[data-rule]');
+
+    this.input.addEventListener('input', () => this.classifyAndRoute(this.input.value, false));
+    this.samples?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.sample-btn');
+      if (!btn) return;
+      // unescape escaped newlines if present
+      this.input.value = btn.dataset.sql.replace(/\\n/g, '\n');
+      this.classifyAndRoute(this.input.value, true);
+    });
+
+    // initial classification
+    this.classifyAndRoute(this.input.value, false);
+  }
+
+  stripLeadingComments(sql) {
+    let s = sql.trimStart();
+    while (true) {
+      if (s.startsWith('--')) {
+        const i = s.indexOf('\n');
+        s = i === -1 ? '' : s.slice(i + 1).trimStart();
+        continue;
+      }
+      if (s.startsWith('/*')) {
+        let depth = 0, i = 0;
+        while (i < s.length - 1) {
+          if (s[i] === '/' && s[i+1] === '*') { depth++; i += 2; }
+          else if (s[i] === '*' && s[i+1] === '/') { depth--; i += 2; if (depth === 0) break; }
+          else i++;
+        }
+        s = s.slice(i).trimStart();
+        continue;
+      }
+      break;
+    }
+    return s;
+  }
+
+  classify(sql) {
+    const cleaned = this.stripLeadingComments(sql);
+    if (!cleaned) return { keyword: '∅', type: 'read', route: 'replica · empty is harmless', rule: 'read', target: 'replica' };
+    const m = cleaned.match(/^([A-Za-z]+)/);
+    if (!m) return { keyword: '?', type: 'write', route: 'primary · safe default', rule: 'write', target: 'primary' };
+    const kw = m[1].toUpperCase();
+    const READ = new Set(['SELECT', 'SHOW', 'EXPLAIN', 'SET', 'RESET', 'DISCARD']);
+    const WRITE = new Set(['INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'DROP', 'TRUNCATE', 'GRANT', 'REVOKE', 'VACUUM', 'ANALYZE']);
+    const TXN_OPEN = new Set(['BEGIN', 'START']);
+    const TXN_CLOSE = new Set(['COMMIT', 'END', 'ROLLBACK', 'SAVEPOINT', 'RELEASE']);
+
+    if (READ.has(kw))      return { keyword: kw, type: 'read',  route: 'replica :5435', rule: 'read', target: 'replica' };
+    if (WRITE.has(kw))     return { keyword: kw, type: 'write', route: 'primary :5433', rule: 'write', target: 'primary' };
+    if (TXN_OPEN.has(kw))  return { keyword: kw, type: 'txn',   route: 'primary · pin transaction', rule: 'txn-open', target: 'primary' };
+    if (TXN_CLOSE.has(kw)) return { keyword: kw, type: 'txn',   route: 'primary · unpin', rule: 'txn-close', target: 'primary' };
+    if (kw === 'COPY') {
+      const upper = cleaned.toUpperCase();
+      if (upper.includes(' TO '))   return { keyword: 'COPY ... TO', type: 'read',  route: 'replica · output', rule: 'copy', target: 'replica' };
+      return { keyword: 'COPY ... FROM', type: 'write', route: 'primary · input', rule: 'copy', target: 'primary' };
+    }
+    // default: safe write
+    return { keyword: kw, type: 'write', route: 'primary · safe default', rule: 'write', target: 'primary' };
+  }
+
+  classifyAndRoute(sql, animate) {
+    const result = this.classify(sql);
+    // update verdict cells
+    this.vKeyword.textContent = result.keyword;
+    this.vType.textContent = result.type === 'read' ? 'READ' : result.type === 'write' ? 'WRITE' : 'TXN';
+    this.vRoute.textContent = result.route;
+    // color the type cell
+    this.vTypeCell.classList.remove('read', 'write', 'txn');
+    this.vTypeCell.classList.add(result.type);
+
+    // highlight the matching table row
+    this.tableRows.forEach(row => {
+      const isMatch = row.dataset.rule === result.rule;
+      row.classList.toggle('match-flash', false);
+      if (isMatch) {
+        row.offsetHeight; // reflow
+        row.classList.add('match-flash');
+      }
+    });
+
+    // route the packet
+    this.routePacket(result.target, result.type);
+  }
+
+  routePacket(target, type) {
+    // both packets reset
+    [this.pktUp, this.pktDown].forEach(p => {
+      p.classList.remove('flying', 'read', 'write', 'txn');
+      p.style.left = '0%';
+    });
+    // pick which track
+    const pkt = target === 'replica' ? this.pktUp : this.pktDown;
+    const track = target === 'replica' ? this.trackUp : this.trackDown;
+    pkt.classList.add('flying', type);
+    pkt.style.left = '0%';
+    pkt.offsetHeight;
+    pkt.style.transition = 'left 0.7s cubic-bezier(0.65,0,0.35,1), background 0.3s';
+    requestAnimationFrame(() => {
+      pkt.style.left = '100%';
+    });
+
+    // highlight target node
+    this.primaryNode.classList.toggle('target', target === 'primary');
+    this.replicaNode.classList.toggle('target', target === 'replica');
+    setTimeout(() => {
+      this.primaryNode.classList.remove('target');
+      this.replicaNode.classList.remove('target');
+      pkt.classList.remove('flying');
+    }, 1500);
+  }
+}
+
+// Boot
+window.addEventListener('DOMContentLoaded', () => {
+  new SlidePresentation();
+  new InlineEditor();
+  // Interactive diagrams — wait a frame so SVG sizing settles
+  requestAnimationFrame(() => {
+    new InteractiveArch();
+    new SinkChainBuilder();
+    new SqlRouter();
+  });
+});
+</script>
+</body>
+</html>
