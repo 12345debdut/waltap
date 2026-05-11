@@ -43,6 +43,11 @@ type Stream struct {
 	relations map[uint32]*pglogrepl.RelationMessage
 	typeMap   *pgtype.Map
 
+	// startLSNOverride, if set, overrides the slot's confirmed_flush_lsn.
+	// Used when a snapshot was taken at a known LSN — streaming should
+	// start from there instead of the slot's position.
+	startLSNOverride string
+
 	// Current transaction context — we track these to attach
 	// transaction metadata (xid, commit time) to each row event.
 	currentXid        uint32
@@ -55,8 +60,16 @@ type Stream struct {
 // "postgres://user:pass@host:port/db". The replication=database
 // parameter is added automatically for the replication connection.
 func NewStream(connStr string, slotName string, publication string, filter Filter, handler func(context.Context, ChangeEvent) error) *Stream {
+	// Append replication=database, handling both cases:
+	//   "postgres://host/db"              → "...db?replication=database"
+	//   "postgres://host/db?sslmode=disable" → "...disable&replication=database"
+	sep := "?"
+	if strings.Contains(connStr, "?") {
+		sep = "&"
+	}
+
 	return &Stream{
-		replConnStr:   connStr + "?replication=database",
+		replConnStr:   connStr + sep + "replication=database",
 		normalConnStr: connStr,
 		slotName:      slotName,
 		publication:   publication,
@@ -65,6 +78,13 @@ func NewStream(connStr string, slotName string, publication string, filter Filte
 		relations:     make(map[uint32]*pglogrepl.RelationMessage),
 		typeMap:       pgtype.NewMap(),
 	}
+}
+
+// SetStartLSN overrides the start position for streaming.
+// Use this when a snapshot was taken at a known LSN so streaming
+// picks up exactly where the snapshot left off.
+func (s *Stream) SetStartLSN(lsn string) {
+	s.startLSNOverride = lsn
 }
 
 // Run starts streaming and blocks until the context is cancelled.
@@ -102,7 +122,19 @@ func (s *Stream) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ensure slot: %w", err)
 	}
-	log.Printf("starting from LSN %s", startLSN)
+
+	// If a snapshot LSN was provided, use it instead of the slot's position.
+	// This ensures streaming starts exactly where the snapshot ended.
+	if s.startLSNOverride != "" {
+		overrideLSN, err := pglogrepl.ParseLSN(s.startLSNOverride)
+		if err != nil {
+			return fmt.Errorf("parse snapshot LSN %q: %w", s.startLSNOverride, err)
+		}
+		startLSN = overrideLSN
+		log.Printf("using snapshot LSN %s (overrides slot position)", startLSN)
+	} else {
+		log.Printf("starting from LSN %s", startLSN)
+	}
 
 	// --- Start replication ---
 	err = pglogrepl.StartReplication(ctx, conn, s.slotName, startLSN,
@@ -130,6 +162,21 @@ func (s *Stream) messageLoop(ctx context.Context, conn *pgconn.PgConn) error {
 		ackInterval     = 10 * time.Second
 		nextAckTime     = time.Now().Add(ackInterval)
 	)
+
+	// On shutdown, send a final ack so Postgres doesn't replay the last
+	// ack interval worth of events on restart.
+	defer func() {
+		if lastReceivedLSN > lastAckedLSN {
+			// Use a fresh context — the original ctx is already cancelled.
+			ackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := s.sendAck(ackCtx, conn, lastReceivedLSN); err != nil {
+				log.Printf("final ack failed: %v", err)
+			} else {
+				log.Printf("final ack'd LSN %s", lastReceivedLSN)
+			}
+		}
+	}()
 
 	for {
 		if ctx.Err() != nil {

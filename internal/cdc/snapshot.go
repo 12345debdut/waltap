@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
+	"github.com/debdutsaha/pgcdc/internal/metrics"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -187,12 +189,14 @@ func (s *Snapshot) snapshotTable(ctx context.Context, tx pgx.Tx, table string) (
 			return count, fmt.Errorf("handler: %w", err)
 		}
 		count++
+		metrics.SnapshotRowsTotal.WithLabelValues(table).Inc()
 	}
 
 	return count, rows.Err()
 }
 
 // quoteIdent quotes a SQL identifier to prevent injection.
+// Embedded double quotes are escaped by doubling them (SQL standard).
 func quoteIdent(name string) string {
-	return `"` + name + `"`
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }

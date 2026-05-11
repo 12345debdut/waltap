@@ -179,6 +179,7 @@ func (p *Proxy) handleClient(ctx context.Context, client net.Conn) {
 
 	// Step 4: Message loop — read queries, route, execute, relay responses
 	var inTransaction bool
+	var txFailed bool // tracks whether the transaction hit an error
 
 	for {
 		if ctx.Err() != nil {
@@ -222,9 +223,11 @@ func (p *Proxy) handleClient(ctx context.Context, client net.Conn) {
 				switch {
 				case upper == "BEGIN" || upper == "START" || upper == "begin" || upper == "start":
 					inTransaction = true
+					txFailed = false
 					log.Printf("[%s] BEGIN → primary (entering transaction)", clientAddr)
 				default:
 					inTransaction = false
+					txFailed = false
 					log.Printf("[%s] %s → primary (ending transaction)", clientAddr, upper)
 				}
 
@@ -247,11 +250,27 @@ func (p *Proxy) handleClient(ctx context.Context, client net.Conn) {
 				pool = p.primaryPool
 			}
 
-			if err := p.executeAndRelay(ctx, pool, sql, client); err != nil {
+			// Determine the correct ReadyForQuery status byte:
+			//   'I' = idle (not in transaction)
+			//   'T' = in transaction
+			//   'E' = failed transaction (error occurred inside a BEGIN block)
+			readyStatus := byte('I')
+			if inTransaction {
+				readyStatus = 'T'
+			}
+
+			if err := p.executeAndRelay(ctx, pool, sql, client, readyStatus); err != nil {
 				log.Printf("[%s] query error: %v", clientAddr, err)
-				// Send error to client and continue
 				sendError(client, err.Error())
-				sendReadyForQuery(client, 'I')
+				if inTransaction {
+					txFailed = true
+				}
+				// Send the right status: 'E' if we're in a failed transaction
+				errStatus := readyStatus
+				if txFailed {
+					errStatus = 'E'
+				}
+				sendReadyForQuery(client, errStatus)
 				continue
 			}
 		} else {
@@ -264,7 +283,9 @@ func (p *Proxy) handleClient(ctx context.Context, client net.Conn) {
 
 // executeAndRelay executes a SQL query on a pool connection and sends
 // the results back to the client in Postgres wire protocol format.
-func (p *Proxy) executeAndRelay(ctx context.Context, pool *pgxpool.Pool, sql string, client net.Conn) error {
+// readyStatus is the ReadyForQuery status byte to send after the response
+// ('I' = idle, 'T' = in transaction, 'E' = failed transaction).
+func (p *Proxy) executeAndRelay(ctx context.Context, pool *pgxpool.Pool, sql string, client net.Conn, readyStatus byte) error {
 	rows, err := pool.Query(ctx, sql)
 	if err != nil {
 		return err
@@ -312,8 +333,8 @@ func (p *Proxy) executeAndRelay(ctx context.Context, pool *pgxpool.Pool, sql str
 		return err
 	}
 
-	// Send ReadyForQuery
-	return sendReadyForQuery(client, 'I')
+	// Send ReadyForQuery with the correct transaction status
+	return sendReadyForQuery(client, readyStatus)
 }
 
 // --- Wire protocol helpers ---

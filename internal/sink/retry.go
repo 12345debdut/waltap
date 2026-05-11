@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand/v2"
 	"time"
 
 	"github.com/debdutsaha/pgcdc/internal/cdc"
+	"github.com/debdutsaha/pgcdc/internal/metrics"
 )
 
 // RetrySink wraps a Sink with retry logic and exponential backoff.
@@ -86,6 +88,7 @@ func (r *RetrySink) Deliver(ctx context.Context, event cdc.ChangeEvent) error {
 		err := r.inner.Deliver(ctx, event)
 		if err == nil {
 			if attempt > 0 {
+				metrics.RetriesTotal.WithLabelValues("success").Inc()
 				log.Printf("retry succeeded on attempt %d for %s %s.%s",
 					attempt+1, event.Action, event.Schema, event.Table)
 			}
@@ -93,6 +96,7 @@ func (r *RetrySink) Deliver(ctx context.Context, event cdc.ChangeEvent) error {
 		}
 
 		lastErr = err
+		metrics.RetriesTotal.WithLabelValues("attempt").Inc()
 
 		// Don't retry if context is cancelled (shutdown).
 		if ctx.Err() != nil {
@@ -100,10 +104,14 @@ func (r *RetrySink) Deliver(ctx context.Context, event cdc.ChangeEvent) error {
 		}
 
 		// Calculate backoff delay: baseDelay * 2^attempt, capped at maxDelay.
+		// Add random jitter (50%-150% of computed delay) to avoid thundering
+		// herd when multiple instances retry simultaneously.
 		delay := time.Duration(float64(r.baseDelay) * math.Pow(2, float64(attempt)))
 		if delay > r.maxDelay {
 			delay = r.maxDelay
 		}
+		jitter := 0.5 + rand.Float64() // [0.5, 1.5)
+		delay = time.Duration(float64(delay) * jitter)
 
 		log.Printf("delivery failed (attempt %d/%d), retrying in %s: %v",
 			attempt+1, r.maxAttempts, delay, err)
@@ -117,6 +125,7 @@ func (r *RetrySink) Deliver(ctx context.Context, event cdc.ChangeEvent) error {
 	}
 
 	// All retries exhausted — call the failure handler.
+	metrics.RetriesTotal.WithLabelValues("exhausted").Inc()
 	return r.onFailure(event, lastErr)
 }
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/debdutsaha/pgcdc/internal/cdc"
+	"github.com/debdutsaha/pgcdc/internal/metrics"
 )
 
 // BatchSink collects events and delivers them in bulk.
@@ -34,10 +35,11 @@ type BatchSink struct {
 	maxSize int
 	maxWait time.Duration
 
-	mu      sync.Mutex
-	buffer  []cdc.ChangeEvent
-	timer   *time.Timer
-	flushed chan struct{} // signals when a timer-triggered flush completes
+	mu       sync.Mutex
+	buffer   []cdc.ChangeEvent
+	timer    *time.Timer
+	flushed  chan struct{} // signals when a timer-triggered flush completes
+	flushCtx context.Context // stable context for timer-triggered flushes
 }
 
 // BatchDeliverer is the interface for sinks that can receive a batch of events.
@@ -73,6 +75,13 @@ func NewBatchSink(inner BatchDeliverer, maxSize int, maxWait time.Duration) *Bat
 func (b *BatchSink) Deliver(ctx context.Context, event cdc.ChangeEvent) error {
 	b.mu.Lock()
 
+	// Capture the context on first Deliver call. The timer goroutine uses
+	// this stored context instead of closing over a per-call ctx that may
+	// be cancelled or replaced by the time the timer fires.
+	if b.flushCtx == nil {
+		b.flushCtx = ctx
+	}
+
 	b.buffer = append(b.buffer, event)
 
 	// Start the flush timer on first event in a new batch.
@@ -80,10 +89,13 @@ func (b *BatchSink) Deliver(ctx context.Context, event cdc.ChangeEvent) error {
 		b.timer = time.AfterFunc(b.maxWait, func() {
 			b.mu.Lock()
 			batch := b.takeBatchLocked()
+			flushCtx := b.flushCtx
 			b.mu.Unlock()
 
 			if len(batch) > 0 {
-				if err := b.inner.DeliverBatch(ctx, batch); err != nil {
+				metrics.BatchFlushTotal.WithLabelValues("time").Inc()
+				metrics.BatchSize.Observe(float64(len(batch)))
+				if err := b.inner.DeliverBatch(flushCtx, batch); err != nil {
 					log.Printf("batch flush (timer) failed: %v", err)
 				}
 			}
@@ -104,6 +116,8 @@ func (b *BatchSink) Deliver(ctx context.Context, event cdc.ChangeEvent) error {
 			b.timer = nil
 		}
 		b.mu.Unlock()
+		metrics.BatchFlushTotal.WithLabelValues("size").Inc()
+		metrics.BatchSize.Observe(float64(len(batch)))
 		return b.inner.DeliverBatch(ctx, batch)
 	}
 
@@ -122,6 +136,8 @@ func (b *BatchSink) Close() error {
 	b.mu.Unlock()
 
 	if len(batch) > 0 {
+		metrics.BatchFlushTotal.WithLabelValues("close").Inc()
+		metrics.BatchSize.Observe(float64(len(batch)))
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := b.inner.DeliverBatch(ctx, batch); err != nil {
